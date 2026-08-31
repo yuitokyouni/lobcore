@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <deque>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -58,11 +61,21 @@ class OrderBook {
   std::optional<Qty> remaining(OrderId id) const;
 
  private:
-  // ---- Stage 1: ここにデータ構造を置く ----
-  // 最初は素直に:
-  //   std::map<Price, std::deque<Order>, std::greater<Price>> bids_;  // begin() が最良買い
-  //   std::map<Price, std::deque<Order>>                      asks_;  // begin() が最良売り
-  // で全テストを通す。最適化は Stage 3 のベンチマークを取ってから。
+  // 板に載っている注文。seq は到着順 (時間優先) の内部連番。
+  struct RestingOrder {
+    OrderId       id;
+    Qty           qty;
+    std::uint64_t seq;
+  };
+
+  using BidLevels = std::map<Price, std::deque<RestingOrder>, std::greater<Price>>;
+  using AskLevels = std::map<Price, std::deque<RestingOrder>>;
+
+  static Qty level_qty(const std::deque<RestingOrder>& level);
+
+  BidLevels     bids_;
+  AskLevels     asks_;
+  std::uint64_t next_seq_ = 0;
 };
 
 }  // namespace lobcore
