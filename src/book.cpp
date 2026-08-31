@@ -13,6 +13,17 @@ Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
 }
 
 std::vector<Trade> OrderBook::add_limit(const Order& order) {
+  // 契約違反: 高々 1 カウンタだけ増やす (qty を先に見る)。
+  // 両カウンタの合計 ≠ 拒否注文数になり得る点に注意。
+  if (order.qty <= 0) {
+    ++rejects_.non_positive_qty;
+    return {};
+  }
+  if (locations_.find(order.id) != locations_.end()) {
+    ++rejects_.duplicate_order_id;
+    return {};
+  }
+
   std::vector<Trade> trades;
   Qty remaining_qty = order.qty;
 

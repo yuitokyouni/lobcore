@@ -1,0 +1,155 @@
+[1mdiff --git a/include/lobcore/book.hpp b/include/lobcore/book.hpp[m
+[1mindex 7e2503e..8486d1a 100755[m
+[1m--- a/include/lobcore/book.hpp[m
+[1m+++ b/include/lobcore/book.hpp[m
+[36m@@ -34,6 +34,15 @@[m [mstruct Level {[m
+   Qty   qty;  // そのレベルに載っている残数量の合計[m
+ };[m
+ [m
+[32m+[m[32m// add_limit が契約違反として拒否した累積件数。[m
+[32m+[m[32m// 検査は qty <= 0 → 重複 ID の順で、1 回の呼び出しで増えるカウンタは高々 1 つ。[m
+[32m+[m[32m// したがって両カウンタの合計は、拒否された注文数と一致しない場合がある[m
+[32m+[m[32m// (qty <= 0 かつ ID 重複の注文は non_positive_qty だけが増える)。[m
+[32m+[m[32mstruct RejectCounts {[m
+[32m+[m[32m  std::uint64_t duplicate_order_id = 0;[m
+[32m+[m[32m  std::uint64_t non_positive_qty   = 0;[m
+[32m+[m[32m};[m
+[32m+[m
+ // 単一銘柄・価格時間優先 (price-time priority) の板。[m
+ //[m
+ // 仕様 (tests/test_book.cpp がこの仕様の実行可能な定義):[m
+[36m@@ -42,14 +51,15 @@[m [mstruct Level {[m
+ //   - cancel: 板に載っている注文を取り除く。見つからなければ false。[m
+ //   - 到着順 (時間優先の根拠) は add_limit が呼ばれた順で決まる。[m
+ //     壁時計は使わない。内部で連番を振ること。[m
+[32m+[m[32m//   - qty <= 0、または板に resting 中の OrderId の再投入は契約違反。[m
+[32m+[m[32m//     約定も resting もせず空の trades を返し、rejects() に記録する。[m
+ //[m
+ // 未決定事項 (自分で決めてテストを足す):[m
+[31m-//   - 重複した OrderId を add_limit に渡されたときの扱い[m
+[31m-//   - qty <= 0 の注文の扱い[m
+ //   - 同一 ID が cancel 後に再利用されたときの扱い[m
+ class OrderBook {[m
+  public:[m
+   // 発生した約定を返す。残数量は板に載る。[m
+[32m+[m[32m  // 契約違反なら空を返し、板は変えない。[m
+   std::vector<Trade> add_limit(const Order& order);[m
+ [m
+   // 取り除けたら true。見つからなければ false。[m
+[36m@@ -61,6 +71,8 @@[m [mclass OrderBook {[m
+   // 板に載っている注文の残数量。載っていなければ nullopt。[m
+   std::optional<Qty> remaining(OrderId id) const;[m
+ [m
+[32m+[m[32m  RejectCounts rejects() const noexcept { return rejects_; }[m
+[32m+[m
+  private:[m
+   // 板に載っている注文。seq は到着順 (時間優先) の内部連番。[m
+   struct RestingOrder {[m
+[36m@@ -84,6 +96,7 @@[m [mclass OrderBook {[m
+   AskLevels                             asks_;[m
+   std::unordered_map<OrderId, Location> locations_;[m
+   std::uint64_t                         next_seq_ = 0;[m
+[32m+[m[32m  RejectCounts                          rejects_{};[m
+ };[m
+ [m
+ }  // namespace lobcore[m
+[1mdiff --git a/src/book.cpp b/src/book.cpp[m
+[1mindex 4eb360e..cb6ac76 100755[m
+[1m--- a/src/book.cpp[m
+[1m+++ b/src/book.cpp[m
+[36m@@ -13,6 +13,17 @@[m [mQty OrderBook::level_qty(const std::deque<RestingOrder>& level) {[m
+ }[m
+ [m
+ std::vector<Trade> OrderBook::add_limit(const Order& order) {[m
+[32m+[m[32m  // 契約違反: 高々 1 カウンタだけ増やす (qty を先に見る)。[m
+[32m+[m[32m  // 両カウンタの合計 ≠ 拒否注文数になり得る点に注意。[m
+[32m+[m[32m  if (order.qty <= 0) {[m
+[32m+[m[32m    ++rejects_.non_positive_qty;[m
+[32m+[m[32m    return {};[m
+[32m+[m[32m  }[m
+[32m+[m[32m  if (locations_.find(order.id) != locations_.end()) {[m
+[32m+[m[32m    ++rejects_.duplicate_order_id;[m
+[32m+[m[32m    return {};[m
+[32m+[m[32m  }[m
+[32m+[m
+   std::vector<Trade> trades;[m
+   Qty remaining_qty = order.qty;[m
+ [m
+[1mdiff --git a/tests/test_book.cpp b/tests/test_book.cpp[m
+[1mindex 9bbbdd8..5d57828 100755[m
+[1m--- a/tests/test_book.cpp[m
+[1m+++ b/tests/test_book.cpp[m
+[36m@@ -121,3 +121,73 @@[m [mTEST_CASE("cancel removes a resting order") {[m
+   CHECK_FALSE(book.cancel(1));    // 二重取消[m
+   CHECK_FALSE(book.cancel(999));  // 存在しない ID[m
+ }[m
+[32m+[m
+[32m+[m[32mTEST_CASE("non-positive qty is rejected without matching or resting") {[m
+[32m+[m[32m  OrderBook book;[m
+[32m+[m[32m  book.add_limit(buy(1, 100, 10));[m
+[32m+[m
+[32m+[m[32m  auto zero = book.add_limit(sell(2, 100, 0));[m
+[32m+[m[32m  CHECK(zero.empty());[m
+[32m+[m[32m  CHECK(book.rejects().non_positive_qty == 1);[m
+[32m+[m[32m  CHECK(book.rejects().duplicate_order_id == 0);[m
+[32m+[m[32m  CHECK(book.remaining(1).value_or(-1) == 10);[m
+[32m+[m[32m  CHECK_FALSE(book.remaining(2).has_value());[m
+[32m+[m
+[32m+[m[32m  auto neg = book.add_limit(sell(3, 100, -5));[m
+[32m+[m[32m  CHECK(neg.empty());[m
+[32m+[m[32m  CHECK(book.rejects().non_positive_qty == 2);[m
+[32m+[m[32m  CHECK(book.best_bid()->qty == 10);[m
+[32m+[m[32m  CHECK_FALSE(book.remaining(3).has_value());[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mTEST_CASE("duplicate resting OrderId is rejected even if it would cross") {[m
+[32m+[m[32m  OrderBook book;[m
+[32m+[m[32m  book.add_limit(buy(1, 100, 10));[m
+[32m+[m[32m  book.add_limit(sell(2, 101, 5));[m
+[32m+[m
+[32m+[m[32m  auto trades = book.add_limit(sell(1, 100, 4));  // ID 1 は resting 中[m
+[32m+[m[32m  CHECK(trades.empty());[m
+[32m+[m[32m  CHECK(book.rejects().duplicate_order_id == 1);[m
+[32m+[m[32m  CHECK(book.rejects().non_positive_qty == 0);[m
+[32m+[m[32m  CHECK(book.remaining(1).value_or(-1) == 10);[m
+[32m+[m[32m  CHECK(book.remaining(2).value_or(-1) == 5);[m
+[32m+[m[32m  CHECK(book.best_bid()->qty == 10);[m
+[32m+[m[32m  CHECK(book.best_ask()->qty == 5);[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mTEST_CASE("qty check precedes duplicate: at most one reject counter per call") {[m
+[32m+[m[32m  OrderBook book;[m
+[32m+[m[32m  book.add_limit(buy(1, 100, 10));[m
+[32m+[m
+[32m+[m[32m  auto trades = book.add_limit(buy(1, 99, 0));  // qty 違反かつ ID 重複[m
+[32m+[m[32m  CHECK(trades.empty());[m
+[32m+[m[32m  CHECK(book.rejects().non_positive_qty == 1);[m
+[32m+[m[32m  CHECK(book.rejects().duplicate_order_id == 0);[m
+[32m+[m[32m  CHECK(book.remaining(1).value_or(-1) == 10);[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mTEST_CASE("reject counters accumulate independently across calls") {[m
+[32m+[m[32m  OrderBook book;[m
+[32m+[m[32m  book.add_limit(buy(1, 100, 10));[m
+[32m+[m[32m  book.add_limit(sell(1, 100, 1));   // duplicate[m
+[32m+[m[32m  book.add_limit(buy(2, 100, 0));    // non-positive[m
+[32m+[m[32m  book.add_limit(buy(3, 100, -1));   // non-positive[m
+[32m+[m[32m  book.add_limit(sell(1, 99, 5));    // duplicate again[m
+[32m+[m[32m  CHECK(book.rejects().duplicate_order_id == 2);[m
+[32m+[m[32m  CHECK(book.rejects().non_positive_qty == 2);[m
+[32m+[m[32m  CHECK(book.remaining(1).value_or(-1) == 10);[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m// 未決定事項の現状記録。仕様として確定したものではない。[m
+[32m+[m[32mTEST_CASE("current behavior (undecided): OrderId may be reused after cancel") {[m
+[32m+[m[32m  OrderBook book;[m
+[32m+[m[32m  book.add_limit(buy(1, 100, 10));[m
+[32m+[m[32m  REQUIRE(book.cancel(1));[m
+[32m+[m
+[32m+[m[32m  auto trades = book.add_limit(buy(1, 101, 7));[m
+[32m+[m[32m  CHECK(trades.empty());[m
+[32m+[m[32m  CHECK(book.rejects().duplicate_order_id == 0);[m
+[32m+[m[32m  CHECK(book.remaining(1).value_or(-1) == 7);[m
+[32m+[m[32m  CHECK(book.best_bid()->price == 101);[m
+[32m+[m[32m  CHECK(book.best_bid()->qty == 7);[m
+[32m+[m[32m}[m

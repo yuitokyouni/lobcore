@@ -34,6 +34,15 @@ struct Level {
   Qty   qty;  // そのレベルに載っている残数量の合計
 };
 
+// add_limit が契約違反として拒否した累積件数。
+// 検査は qty <= 0 → 重複 ID の順で、1 回の呼び出しで増えるカウンタは高々 1 つ。
+// したがって両カウンタの合計は、拒否された注文数と一致しない場合がある
+// (qty <= 0 かつ ID 重複の注文は non_positive_qty だけが増える)。
+struct RejectCounts {
+  std::uint64_t duplicate_order_id = 0;
+  std::uint64_t non_positive_qty   = 0;
+};
+
 // 単一銘柄・価格時間優先 (price-time priority) の板。
 //
 // 仕様 (tests/test_book.cpp がこの仕様の実行可能な定義):
@@ -42,14 +51,15 @@ struct Level {
 //   - cancel: 板に載っている注文を取り除く。見つからなければ false。
 //   - 到着順 (時間優先の根拠) は add_limit が呼ばれた順で決まる。
 //     壁時計は使わない。内部で連番を振ること。
+//   - qty <= 0、または板に resting 中の OrderId の再投入は契約違反。
+//     約定も resting もせず空の trades を返し、rejects() に記録する。
 //
 // 未決定事項 (自分で決めてテストを足す):
-//   - 重複した OrderId を add_limit に渡されたときの扱い
-//   - qty <= 0 の注文の扱い
 //   - 同一 ID が cancel 後に再利用されたときの扱い
 class OrderBook {
  public:
   // 発生した約定を返す。残数量は板に載る。
+  // 契約違反なら空を返し、板は変えない。
   std::vector<Trade> add_limit(const Order& order);
 
   // 取り除けたら true。見つからなければ false。
@@ -60,6 +70,8 @@ class OrderBook {
 
   // 板に載っている注文の残数量。載っていなければ nullopt。
   std::optional<Qty> remaining(OrderId id) const;
+
+  RejectCounts rejects() const noexcept { return rejects_; }
 
  private:
   // 板に載っている注文。seq は到着順 (時間優先) の内部連番。
@@ -84,6 +96,7 @@ class OrderBook {
   AskLevels                             asks_;
   std::unordered_map<OrderId, Location> locations_;
   std::uint64_t                         next_seq_ = 0;
+  RejectCounts                          rejects_{};
 };
 
 }  // namespace lobcore

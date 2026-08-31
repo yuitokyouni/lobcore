@@ -121,3 +121,73 @@ TEST_CASE("cancel removes a resting order") {
   CHECK_FALSE(book.cancel(1));    // 二重取消
   CHECK_FALSE(book.cancel(999));  // 存在しない ID
 }
+
+TEST_CASE("non-positive qty is rejected without matching or resting") {
+  OrderBook book;
+  book.add_limit(buy(1, 100, 10));
+
+  auto zero = book.add_limit(sell(2, 100, 0));
+  CHECK(zero.empty());
+  CHECK(book.rejects().non_positive_qty == 1);
+  CHECK(book.rejects().duplicate_order_id == 0);
+  CHECK(book.remaining(1).value_or(-1) == 10);
+  CHECK_FALSE(book.remaining(2).has_value());
+
+  auto neg = book.add_limit(sell(3, 100, -5));
+  CHECK(neg.empty());
+  CHECK(book.rejects().non_positive_qty == 2);
+  CHECK(book.best_bid()->qty == 10);
+  CHECK_FALSE(book.remaining(3).has_value());
+}
+
+TEST_CASE("duplicate resting OrderId is rejected even if it would cross") {
+  OrderBook book;
+  book.add_limit(buy(1, 100, 10));
+  book.add_limit(sell(2, 101, 5));
+
+  auto trades = book.add_limit(sell(1, 100, 4));  // ID 1 は resting 中
+  CHECK(trades.empty());
+  CHECK(book.rejects().duplicate_order_id == 1);
+  CHECK(book.rejects().non_positive_qty == 0);
+  CHECK(book.remaining(1).value_or(-1) == 10);
+  CHECK(book.remaining(2).value_or(-1) == 5);
+  CHECK(book.best_bid()->qty == 10);
+  CHECK(book.best_ask()->qty == 5);
+}
+
+TEST_CASE("qty check precedes duplicate: at most one reject counter per call") {
+  OrderBook book;
+  book.add_limit(buy(1, 100, 10));
+
+  auto trades = book.add_limit(buy(1, 99, 0));  // qty 違反かつ ID 重複
+  CHECK(trades.empty());
+  CHECK(book.rejects().non_positive_qty == 1);
+  CHECK(book.rejects().duplicate_order_id == 0);
+  CHECK(book.remaining(1).value_or(-1) == 10);
+}
+
+TEST_CASE("reject counters accumulate independently across calls") {
+  OrderBook book;
+  book.add_limit(buy(1, 100, 10));
+  book.add_limit(sell(1, 100, 1));   // duplicate
+  book.add_limit(buy(2, 100, 0));    // non-positive
+  book.add_limit(buy(3, 100, -1));   // non-positive
+  book.add_limit(sell(1, 99, 5));    // duplicate again
+  CHECK(book.rejects().duplicate_order_id == 2);
+  CHECK(book.rejects().non_positive_qty == 2);
+  CHECK(book.remaining(1).value_or(-1) == 10);
+}
+
+// 未決定事項の現状記録。仕様として確定したものではない。
+TEST_CASE("current behavior (undecided): OrderId may be reused after cancel") {
+  OrderBook book;
+  book.add_limit(buy(1, 100, 10));
+  REQUIRE(book.cancel(1));
+
+  auto trades = book.add_limit(buy(1, 101, 7));
+  CHECK(trades.empty());
+  CHECK(book.rejects().duplicate_order_id == 0);
+  CHECK(book.remaining(1).value_or(-1) == 7);
+  CHECK(book.best_bid()->price == 101);
+  CHECK(book.best_bid()->qty == 7);
+}
