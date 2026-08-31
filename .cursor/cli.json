@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "permissions": {
+    "allow": [
+      "Shell(cmake)",
+      "Shell(ctest)",
+      "Shell(ninja)",
+      "Shell(ls)",
+      "Shell(cat)",
+      "Shell(grep)",
+      "Shell(find)",
+      "Shell(git:status)",
+      "Shell(git:diff)",
+      "Shell(git:log)"
+    ],
+    "deny": [
+      "Shell(git:commit*)",
+      "Shell(git:push*)",
+      "Shell(git:reset*)",
+      "Shell(git:checkout*)",
+      "Shell(git:switch*)",
+      "Shell(rm)",
+      "Shell(sudo)",
+      "Shell(curl)",
+      "Shell(wget)",
+      "Read(~/.ssh/**)",
+      "Read(~/.config/gh/**)"
+    ]
+  }
+}
