@@ -4,6 +4,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include <lobcore/types.hpp>
@@ -68,14 +69,21 @@ class OrderBook {
     std::uint64_t seq;
   };
 
+  // OrderId → 価格レベルの位置。レベル内は線形走査する。
+  struct Location {
+    Side  side;
+    Price price;
+  };
+
   using BidLevels = std::map<Price, std::deque<RestingOrder>, std::greater<Price>>;
   using AskLevels = std::map<Price, std::deque<RestingOrder>>;
 
   static Qty level_qty(const std::deque<RestingOrder>& level);
 
-  BidLevels     bids_;
-  AskLevels     asks_;
-  std::uint64_t next_seq_ = 0;
+  BidLevels                             bids_;
+  AskLevels                             asks_;
+  std::unordered_map<OrderId, Location> locations_;
+  std::uint64_t                         next_seq_ = 0;
 };
 
 }  // namespace lobcore

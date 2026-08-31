@@ -29,6 +29,7 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
       maker.qty -= fill;
       remaining_qty -= fill;
       if (maker.qty == 0) {
+        locations_.erase(maker.id);
         queue.pop_front();
         if (queue.empty()) {
           asks_.erase(level_it);
@@ -38,6 +39,7 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
     if (remaining_qty > 0) {
       bids_[order.price].push_back(
           RestingOrder{order.id, remaining_qty, next_seq_++});
+      locations_[order.id] = Location{Side::Buy, order.price};
     }
   } else {
     while (remaining_qty > 0 && !bids_.empty()) {
@@ -52,6 +54,7 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
       maker.qty -= fill;
       remaining_qty -= fill;
       if (maker.qty == 0) {
+        locations_.erase(maker.id);
         queue.pop_front();
         if (queue.empty()) {
           bids_.erase(level_it);
@@ -61,14 +64,43 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
     if (remaining_qty > 0) {
       asks_[order.price].push_back(
           RestingOrder{order.id, remaining_qty, next_seq_++});
+      locations_[order.id] = Location{Side::Sell, order.price};
     }
   }
 
   return trades;
 }
 
-bool OrderBook::cancel(OrderId /*id*/) {
-  return false;
+bool OrderBook::cancel(OrderId id) {
+  const auto loc_it = locations_.find(id);
+  if (loc_it == locations_.end()) {
+    return false;
+  }
+  const Location loc = loc_it->second;
+
+  auto erase_from = [&](auto& levels) {
+    auto level_it = levels.find(loc.price);
+    if (level_it == levels.end()) {
+      return false;
+    }
+    auto& queue = level_it->second;
+    for (auto it = queue.begin(); it != queue.end(); ++it) {
+      if (it->id == id) {
+        queue.erase(it);
+        if (queue.empty()) {
+          levels.erase(level_it);
+        }
+        locations_.erase(loc_it);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (loc.side == Side::Buy) {
+    return erase_from(bids_);
+  }
+  return erase_from(asks_);
 }
 
 std::optional<Level> OrderBook::best_bid() const {
@@ -88,18 +120,33 @@ std::optional<Level> OrderBook::best_ask() const {
 }
 
 std::optional<Qty> OrderBook::remaining(OrderId id) const {
-  for (const auto& entry : bids_) {
-    for (const auto& o : entry.second) {
-      if (o.id == id) {
-        return o.qty;
-      }
-    }
+  const auto loc_it = locations_.find(id);
+  if (loc_it == locations_.end()) {
+    return std::nullopt;
   }
-  for (const auto& entry : asks_) {
-    for (const auto& o : entry.second) {
-      if (o.id == id) {
-        return o.qty;
+  const Location& loc = loc_it->second;
+
+  const auto* queue = [&]() -> const std::deque<RestingOrder>* {
+    if (loc.side == Side::Buy) {
+      const auto level_it = bids_.find(loc.price);
+      if (level_it == bids_.end()) {
+        return nullptr;
       }
+      return &level_it->second;
+    }
+    const auto level_it = asks_.find(loc.price);
+    if (level_it == asks_.end()) {
+      return nullptr;
+    }
+    return &level_it->second;
+  }();
+
+  if (queue == nullptr) {
+    return std::nullopt;
+  }
+  for (const auto& o : *queue) {
+    if (o.id == id) {
+      return o.qty;
     }
   }
   return std::nullopt;
