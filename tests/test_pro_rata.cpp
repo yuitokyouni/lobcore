@@ -30,21 +30,16 @@ OrderBook make_pro_rata_book() {
   return OrderBook(std::make_unique<ProRata>());
 }
 
-std::unordered_map<OrderId, Qty> fills_for_taker(const std::vector<Trade>& trades, OrderId taker_id) {
-  std::unordered_map<OrderId, Qty> out;
-  for (const auto& trade : trades) {
-    if (trade.taker_id == taker_id) {
-      out[trade.maker_id] += trade.qty;
-    }
-  }
-  return out;
-}
-
 void check_fills(const std::vector<Trade>& trades,
                  OrderId                   taker_id,
                  Price                     price,
                  std::initializer_list<std::pair<OrderId, Qty>> expected) {
-  const auto got = fills_for_taker(trades, taker_id);
+  std::unordered_map<OrderId, Qty> got;
+  for (const auto& trade : trades) {
+    if (trade.taker_id == taker_id && trade.price == price) {
+      got[trade.maker_id] += trade.qty;
+    }
+  }
   REQUIRE(got.size() == expected.size());
   for (const auto& [maker_id, qty] : expected) {
     INFO("maker_id=" << maker_id);
@@ -120,7 +115,7 @@ TEST_CASE("pro-rata with T=1 awards single lot to highest remainder maker") {
 
   REQUIRE(trades.size() == 1);
   check_fills(trades, 3, 100, {{2, 1}});
-  CHECK_FALSE(book.remaining(1).has_value());
+  CHECK(book.remaining(1).value_or(-1) == 3);
   CHECK(book.remaining(2).value_or(-1) == 6);
 }
 

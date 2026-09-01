@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <vector>
 
 namespace lobcore {
 
@@ -36,6 +37,44 @@ Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
   return total;
 }
 
+std::vector<LevelMaker> OrderBook::makers_from_level(const std::deque<RestingOrder>& level) {
+  std::vector<LevelMaker> makers;
+  makers.reserve(level.size());
+  for (const auto& order : level) {
+    makers.push_back(LevelMaker{order.id, order.qty, order.seq});
+  }
+  return makers;
+}
+
+void OrderBook::apply_level_allocation(std::deque<RestingOrder>& queue,
+                                       const AllocateResult&     allocation,
+                                       const Price               price,
+                                       const OrderId             taker_id,
+                                       std::vector<Trade>&       trades,
+                                       std::unordered_map<OrderId, Location>& locations) {
+  for (const LevelFill& fill : allocation.fills) {
+    trades.push_back(Trade{.maker_id = fill.maker_id,
+                           .taker_id = taker_id,
+                           .price    = price,
+                           .qty      = fill.qty});
+    for (auto& maker : queue) {
+      if (maker.id == fill.maker_id) {
+        maker.qty -= fill.qty;
+        break;
+      }
+    }
+  }
+
+  for (auto it = queue.begin(); it != queue.end();) {
+    if (it->qty == 0) {
+      locations.erase(it->id);
+      it = queue.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 OrderBook::OrderBook() : rule_(std::make_shared<PriceTimePriority>()) {}
 
 OrderBook::OrderBook(std::unique_ptr<AllocationRule> rule)
@@ -62,11 +101,14 @@ std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_a
     return {};
   }
 
-  has_last_received_  = true;
-  last_received_at_   = received_at;
+  const OrderBook checkpoint(*this);
+
+  has_last_received_ = true;
+  last_received_at_  = received_at;
 
   std::vector<Trade> trades;
-  Qty remaining_qty = order.qty;
+  Qty                remaining_qty = order.qty;
+  bool               overflow    = false;
 
   auto match_and_rest = [&](auto& opposite_levels, auto& own_levels, Side own_side,
                             auto stop_crossing) {
@@ -75,24 +117,28 @@ std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_a
       if (stop_crossing(level_it->first, order.price)) {
         break;
       }
-      auto& queue = level_it->second;
-      auto& maker = queue.front();
-      const Qty fill = std::min(remaining_qty, maker.qty);
-      trades.push_back(Trade{.maker_id = maker.id,
-                               .taker_id = order.id,
-                               .price    = level_it->first,
-                               .qty      = fill});
-      maker.qty -= fill;
-      remaining_qty -= fill;
-      if (maker.qty == 0) {
-        locations_.erase(maker.id);
-        queue.pop_front();
-        if (queue.empty()) {
-          opposite_levels.erase(level_it);
-        }
+
+      auto&       queue       = level_it->second;
+      const Price price       = level_it->first;
+      const Qty   level_total = level_qty(queue);
+      const Qty   take        = std::min(remaining_qty, level_total);
+      const auto  makers      = makers_from_level(queue);
+
+      const AllocateResult allocation =
+          rule_->allocate_level(makers.data(), makers.size(), take);
+      if (allocation.status == AllocateStatus::Overflow) {
+        overflow = true;
+        return;
+      }
+
+      apply_level_allocation(queue, allocation, price, order.id, trades, locations_);
+      remaining_qty -= take;
+      if (queue.empty()) {
+        opposite_levels.erase(level_it);
       }
     }
-    if (remaining_qty > 0) {
+
+    if (!overflow && remaining_qty > 0) {
       own_levels[order.price].push_back(
           RestingOrder{.id = order.id, .qty = remaining_qty, .seq = next_seq_++});
       locations_[order.id] = Location{own_side, order.price};
@@ -103,6 +149,16 @@ std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_a
     match_and_rest(asks_, bids_, Side::Buy, std::greater<>{});
   } else {
     match_and_rest(bids_, asks_, Side::Sell, std::less<>{});
+  }
+
+  if (overflow) {
+    bids_              = checkpoint.bids_;
+    asks_              = checkpoint.asks_;
+    locations_         = checkpoint.locations_;
+    has_last_received_ = checkpoint.has_last_received_;
+    last_received_at_  = checkpoint.last_received_at_;
+    ++rejects_.allocation_overflow;
+    return {};
   }
 
   return trades;

@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <lobcore/kernel/allocation_rule.hpp>
+#include <lobcore/allocation.hpp>
 #include <lobcore/types.hpp>
 
 namespace lobcore {
@@ -70,7 +70,7 @@ struct RejectCounts {
 // Pro-rata (tests/test_pro_rata.cpp):
 //   - 同一価格レベル内で数量比に按分。端数は最大剰余法、rem 同点は seq 昇順。
 //   - 按分の分子はマッチ時点の残数量 qi。
-//   - 各 (T * qi) およびレベル合計 Q は int64 に収まること。溢れれば allocation_overflow で拒否。
+//   - 各 (T * qi) が int64 に収まること (qi > std::numeric_limits<Qty>::max() / T で検査)。溢れれば allocation_overflow で拒否。
 class LoggedBook;
 class BookEventLogWriter;
 
@@ -119,6 +119,14 @@ class OrderBook {
   using AskLevels = std::map<Price, std::deque<RestingOrder>>;
 
   static Qty level_qty(const std::deque<RestingOrder>& level);
+
+  static std::vector<LevelMaker> makers_from_level(const std::deque<RestingOrder>& level);
+  static void apply_level_allocation(std::deque<RestingOrder>& queue,
+                                     const AllocateResult&     allocation,
+                                     Price                     price,
+                                     OrderId                   taker_id,
+                                     std::vector<Trade>&       trades,
+                                     std::unordered_map<OrderId, Location>& locations);
 
   BidLevels                             bids_;
   AskLevels                             asks_;
