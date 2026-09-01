@@ -71,6 +71,9 @@ cmake --build build-rel
 
 ### 3.1 使うハーネス
 
+`cross_sweep_profile` は **Valgrind 開発ヘッダ**（Linux: `valgrind-dev`）が必要な
+オプションターゲット。CI などヘッダが無い環境ではビルドされない。
+
 | 用途 | ツール | ハーネス |
 |------|--------|----------|
 | 命令数・関数内訳 | Callgrind | `bench/cross_sweep_profile` |
