@@ -29,17 +29,6 @@ std::uint64_t fnv1a_i64(std::uint64_t hash, std::int64_t value) {
 
 }  // namespace
 
-void OrderBook::reset_empty_with_fresh_pool() {
-  pool_               = std::make_unique<std::pmr::unsynchronized_pool_resource>();
-  bids_               = BidLevels(pool_.get());
-  asks_               = AskLevels(pool_.get());
-  locations_          = Locations(pool_.get());
-  next_seq_           = 0;
-  last_received_at_   = 0;
-  has_last_received_  = false;
-  rejects_            = {};
-}
-
 OrderBook::OrderBook()
     : pool_(std::make_unique<std::pmr::unsynchronized_pool_resource>())
     , bids_(pool_.get())
@@ -57,43 +46,80 @@ OrderBook::OrderBook(const OrderBook& other)
     , rejects_(other.rejects_) {}
 
 OrderBook::OrderBook(OrderBook&& other) noexcept
-    : pool_(std::move(other.pool_))
-    , bids_(std::move(other.bids_))
-    , asks_(std::move(other.asks_))
-    , locations_(std::move(other.locations_))
+    : pool_(std::make_unique<std::pmr::unsynchronized_pool_resource>())
+    , bids_(other.bids_, pool_.get())
+    , asks_(other.asks_, pool_.get())
+    , locations_(other.locations_, pool_.get())
     , next_seq_(other.next_seq_)
     , last_received_at_(other.last_received_at_)
     , has_last_received_(other.has_last_received_)
     , rejects_(other.rejects_) {
-  other.reset_empty_with_fresh_pool();
+  other.bids_.clear();
+  other.asks_.clear();
+  other.locations_.clear();
+  other.next_seq_          = 0;
+  other.last_received_at_  = 0;
+  other.has_last_received_ = false;
+  other.rejects_           = {};
 }
 
 OrderBook& OrderBook::operator=(const OrderBook& other) {
-  if (this != &other) {
-    OrderBook tmp(other);
-    swap(*this, tmp);
+  if (this == &other) {
+    return *this;
   }
+
+  bids_.~BidLevels();
+  asks_.~AskLevels();
+  locations_.~Locations();
+
+  new (&bids_) BidLevels(other.bids_, pool_.get());
+  new (&asks_) AskLevels(other.asks_, pool_.get());
+  new (&locations_) Locations(other.locations_, pool_.get());
+
+  next_seq_          = other.next_seq_;
+  last_received_at_  = other.last_received_at_;
+  has_last_received_ = other.has_last_received_;
+  rejects_           = other.rejects_;
+
   return *this;
 }
 
 OrderBook& OrderBook::operator=(OrderBook&& other) noexcept {
-  if (this != &other) {
-    OrderBook tmp(std::move(other));
-    swap(*this, tmp);
+  if (this == &other) {
+    return *this;
   }
+
+  bids_.~BidLevels();
+  asks_.~AskLevels();
+  locations_.~Locations();
+
+  new (&bids_) BidLevels(other.bids_, pool_.get());
+  new (&asks_) AskLevels(other.asks_, pool_.get());
+  new (&locations_) Locations(other.locations_, pool_.get());
+
+  next_seq_          = other.next_seq_;
+  last_received_at_  = other.last_received_at_;
+  has_last_received_ = other.has_last_received_;
+  rejects_           = other.rejects_;
+
+  other.bids_.clear();
+  other.asks_.clear();
+  other.locations_.clear();
+  other.next_seq_          = 0;
+  other.last_received_at_  = 0;
+  other.has_last_received_ = false;
+  other.rejects_           = {};
+
   return *this;
 }
 
 void swap(OrderBook& a, OrderBook& b) noexcept {
-  using std::swap;
-  swap(a.pool_, b.pool_);
-  swap(a.bids_, b.bids_);
-  swap(a.asks_, b.asks_);
-  swap(a.locations_, b.locations_);
-  swap(a.next_seq_, b.next_seq_);
-  swap(a.last_received_at_, b.last_received_at_);
-  swap(a.has_last_received_, b.has_last_received_);
-  swap(a.rejects_, b.rejects_);
+  if (&a == &b) {
+    return;
+  }
+  OrderBook tmp(std::move(a));
+  a = std::move(b);
+  b = std::move(tmp);
 }
 
 Qty OrderBook::level_qty(const std::pmr::deque<RestingOrder>& level) {

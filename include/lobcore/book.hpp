@@ -115,8 +115,6 @@ class OrderBook {
 
   static Qty level_qty(const std::pmr::deque<RestingOrder>& level);
 
-  void reset_empty_with_fresh_pool();
-
   // pool_ を先に宣言し、コンテナより後に破棄する。
   std::unique_ptr<std::pmr::unsynchronized_pool_resource> pool_;
   BidLevels                                               bids_;
