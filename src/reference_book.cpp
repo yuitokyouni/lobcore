@@ -1,8 +1,7 @@
-#include <lobcore/book.hpp>
+#include <lobcore/reference_book.hpp>
 
 #include <algorithm>
 #include <cstdint>
-#include <utility>
 
 namespace lobcore {
 
@@ -29,100 +28,7 @@ std::uint64_t fnv1a_i64(std::uint64_t hash, std::int64_t value) {
 
 }  // namespace
 
-OrderBook::OrderBook()
-    : pool_(std::make_unique<std::pmr::unsynchronized_pool_resource>())
-    , bids_(pool_.get())
-    , asks_(pool_.get())
-    , locations_(pool_.get()) {}
-
-OrderBook::OrderBook(const OrderBook& other)
-    : pool_(std::make_unique<std::pmr::unsynchronized_pool_resource>())
-    , bids_(other.bids_, pool_.get())
-    , asks_(other.asks_, pool_.get())
-    , locations_(other.locations_, pool_.get())
-    , next_seq_(other.next_seq_)
-    , last_received_at_(other.last_received_at_)
-    , has_last_received_(other.has_last_received_)
-    , rejects_(other.rejects_) {}
-
-OrderBook::OrderBook(OrderBook&& other) noexcept
-    : pool_(std::make_unique<std::pmr::unsynchronized_pool_resource>())
-    , bids_(other.bids_, pool_.get())
-    , asks_(other.asks_, pool_.get())
-    , locations_(other.locations_, pool_.get())
-    , next_seq_(other.next_seq_)
-    , last_received_at_(other.last_received_at_)
-    , has_last_received_(other.has_last_received_)
-    , rejects_(other.rejects_) {
-  other.bids_.clear();
-  other.asks_.clear();
-  other.locations_.clear();
-  other.next_seq_          = 0;
-  other.last_received_at_  = 0;
-  other.has_last_received_ = false;
-  other.rejects_           = {};
-}
-
-OrderBook& OrderBook::operator=(const OrderBook& other) {
-  if (this == &other) {
-    return *this;
-  }
-
-  bids_.~BidLevels();
-  asks_.~AskLevels();
-  locations_.~Locations();
-
-  new (&bids_) BidLevels(other.bids_, pool_.get());
-  new (&asks_) AskLevels(other.asks_, pool_.get());
-  new (&locations_) Locations(other.locations_, pool_.get());
-
-  next_seq_          = other.next_seq_;
-  last_received_at_  = other.last_received_at_;
-  has_last_received_ = other.has_last_received_;
-  rejects_           = other.rejects_;
-
-  return *this;
-}
-
-OrderBook& OrderBook::operator=(OrderBook&& other) noexcept {
-  if (this == &other) {
-    return *this;
-  }
-
-  bids_.~BidLevels();
-  asks_.~AskLevels();
-  locations_.~Locations();
-
-  new (&bids_) BidLevels(other.bids_, pool_.get());
-  new (&asks_) AskLevels(other.asks_, pool_.get());
-  new (&locations_) Locations(other.locations_, pool_.get());
-
-  next_seq_          = other.next_seq_;
-  last_received_at_  = other.last_received_at_;
-  has_last_received_ = other.has_last_received_;
-  rejects_           = other.rejects_;
-
-  other.bids_.clear();
-  other.asks_.clear();
-  other.locations_.clear();
-  other.next_seq_          = 0;
-  other.last_received_at_  = 0;
-  other.has_last_received_ = false;
-  other.rejects_           = {};
-
-  return *this;
-}
-
-void swap(OrderBook& a, OrderBook& b) noexcept {
-  if (&a == &b) {
-    return;
-  }
-  OrderBook tmp(std::move(a));
-  a = std::move(b);
-  b = std::move(tmp);
-}
-
-Qty OrderBook::level_qty(const std::pmr::deque<RestingOrder>& level) {
+Qty ReferenceBook::level_qty(const std::deque<RestingOrder>& level) {
   Qty total = 0;
   for (const auto& o : level) {
     total += o.qty;
@@ -130,7 +36,7 @@ Qty OrderBook::level_qty(const std::pmr::deque<RestingOrder>& level) {
   return total;
 }
 
-std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_at) {
+std::vector<Trade> ReferenceBook::add_limit(const Order& order, Timestamp received_at) {
   // 契約違反: 高々 1 カウンタだけ増やす (qty を先に見る)。
   // 両カウンタの合計 ≠ 拒否注文数になり得る点に注意。
   if (order.qty <= 0) {
@@ -196,7 +102,7 @@ std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_a
   return trades;
 }
 
-bool OrderBook::cancel(OrderId id) {
+bool ReferenceBook::cancel(OrderId id) {
   const auto loc_it = locations_.find(id);
   if (loc_it == locations_.end()) {
     return false;
@@ -228,7 +134,7 @@ bool OrderBook::cancel(OrderId id) {
   return erase_from(asks_);
 }
 
-std::optional<Level> OrderBook::best_bid() const {
+std::optional<Level> ReferenceBook::best_bid() const {
   if (bids_.empty()) {
     return std::nullopt;
   }
@@ -236,7 +142,7 @@ std::optional<Level> OrderBook::best_bid() const {
   return Level{price, level_qty(level)};
 }
 
-std::optional<Level> OrderBook::best_ask() const {
+std::optional<Level> ReferenceBook::best_ask() const {
   if (asks_.empty()) {
     return std::nullopt;
   }
@@ -244,14 +150,14 @@ std::optional<Level> OrderBook::best_ask() const {
   return Level{price, level_qty(level)};
 }
 
-std::optional<Qty> OrderBook::remaining(OrderId id) const {
+std::optional<Qty> ReferenceBook::remaining(OrderId id) const {
   const auto loc_it = locations_.find(id);
   if (loc_it == locations_.end()) {
     return std::nullopt;
   }
   const Location& loc = loc_it->second;
 
-  const auto* queue = [&]() -> const std::pmr::deque<RestingOrder>* {
+  const auto* queue = [&]() -> const std::deque<RestingOrder>* {
     if (loc.side == Side::Buy) {
       const auto level_it = bids_.find(loc.price);
       if (level_it == bids_.end()) {
@@ -277,7 +183,7 @@ std::optional<Qty> OrderBook::remaining(OrderId id) const {
   return std::nullopt;
 }
 
-std::optional<Side> OrderBook::resting_side(OrderId id) const {
+std::optional<Side> ReferenceBook::resting_side(OrderId id) const {
   const auto loc_it = locations_.find(id);
   if (loc_it == locations_.end()) {
     return std::nullopt;
@@ -285,7 +191,7 @@ std::optional<Side> OrderBook::resting_side(OrderId id) const {
   return loc_it->second.side;
 }
 
-std::uint64_t OrderBook::state_hash() const noexcept {
+std::uint64_t ReferenceBook::state_hash() const noexcept {
   std::uint64_t hash = kFnvOffsetBasis;
 
   for (const auto& [price, level] : bids_) {
@@ -313,7 +219,7 @@ std::uint64_t OrderBook::state_hash() const noexcept {
   return hash;
 }
 
-bool OrderBook::locations_consistent() const {
+bool ReferenceBook::locations_consistent() const {
   std::unordered_map<OrderId, Location> rebuilt;
   rebuilt.reserve(locations_.size());
 

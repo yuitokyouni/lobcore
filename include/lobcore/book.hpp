@@ -3,8 +3,11 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
+#include <memory_resource>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <lobcore/types.hpp>
@@ -40,9 +43,9 @@ struct Level {
 // したがって両カウンタの合計は、拒否された注文数と一致しない場合がある
 // (qty <= 0 かつ ID 重複の注文は non_positive_qty だけが増える)。
 struct RejectCounts {
-  std::uint64_t duplicate_order_id       = 0;
-  std::uint64_t non_positive_qty         = 0;
-  std::uint64_t non_monotonic_timestamp  = 0;
+  std::uint64_t duplicate_order_id      = 0;
+  std::uint64_t non_positive_qty        = 0;
+  std::uint64_t non_monotonic_timestamp = 0;
 };
 
 // 単一銘柄・価格時間優先 (price-time priority) の板。
@@ -62,6 +65,15 @@ class LoggedBook;
 
 class OrderBook {
  public:
+  OrderBook();
+  OrderBook(const OrderBook& other);
+  OrderBook(OrderBook&& other) noexcept;
+  OrderBook& operator=(const OrderBook& other);
+  OrderBook& operator=(OrderBook&& other) noexcept;
+  ~OrderBook() = default;
+
+  friend void swap(OrderBook& a, OrderBook& b) noexcept;
+
   // 発生した約定を返す。残数量は板に載る。
   // 契約違反なら空を返し、板は変えない。
   std::vector<Trade> add_limit(const Order& order, Timestamp received_at);
@@ -97,18 +109,21 @@ class OrderBook {
     Price price;
   };
 
-  using BidLevels = std::map<Price, std::deque<RestingOrder>, std::greater<Price>>;
-  using AskLevels = std::map<Price, std::deque<RestingOrder>>;
+  using BidLevels = std::pmr::map<Price, std::pmr::deque<RestingOrder>, std::greater<Price>>;
+  using AskLevels = std::pmr::map<Price, std::pmr::deque<RestingOrder>>;
+  using Locations = std::pmr::unordered_map<OrderId, Location>;
 
-  static Qty level_qty(const std::deque<RestingOrder>& level);
+  static Qty level_qty(const std::pmr::deque<RestingOrder>& level);
 
-  BidLevels                             bids_;
-  AskLevels                             asks_;
-  std::unordered_map<OrderId, Location> locations_;
-  std::uint64_t                         next_seq_           = 0;
-  Timestamp                             last_received_at_   = 0;
-  bool                                  has_last_received_  = false;
-  RejectCounts                          rejects_{};
+  // pool_ を先に宣言し、コンテナより後に破棄する。
+  std::unique_ptr<std::pmr::unsynchronized_pool_resource> pool_;
+  BidLevels                                               bids_;
+  AskLevels                                               asks_;
+  Locations                                               locations_;
+  std::uint64_t                                           next_seq_          = 0;
+  Timestamp                                               last_received_at_  = 0;
+  bool                                                    has_last_received_ = false;
+  RejectCounts                                            rejects_{};
 };
 
 }  // namespace lobcore
