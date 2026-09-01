@@ -101,9 +101,14 @@ TEST_CASE("Kernel run stops at end_time without consuming later events") {
   CHECK(kernel.events_processed() == 1);
   CHECK(kernel.now() == 10);
   CHECK_FALSE(kernel.empty());
+  const Event* deferred = kernel.peek_next();
+  REQUIRE(deferred != nullptr);
+  CHECK(deferred->time == 11);
+  REQUIRE(std::holds_alternative<AgentWakeup>(deferred->body));
+  CHECK(std::get<AgentWakeup>(deferred->body).agent == 2);
 }
 
-TEST_CASE("Kernel run stops at max_events") {
+TEST_CASE("Kernel run stops at max_events and leaves remainder in heap") {
   KernelConfig config;
   config.max_events = 2;
   Kernel kernel(config);
@@ -115,5 +120,21 @@ TEST_CASE("Kernel run stops at max_events") {
 
   CHECK(kernel.events_processed() == 2);
   CHECK(kernel.now() == 2);
+  CHECK_FALSE(kernel.empty());
+  const Event* deferred = kernel.peek_next();
+  REQUIRE(deferred != nullptr);
+  CHECK(deferred->time == 3);
+}
+
+TEST_CASE("Kernel max_events zero processes nothing") {
+  KernelConfig config;
+  config.max_events = 0;
+  Kernel kernel(config);
+
+  kernel.schedule(1, AgentWakeup{1});
+  kernel.run();
+
+  CHECK(kernel.events_processed() == 0);
+  CHECK(kernel.now() == 0);
   CHECK_FALSE(kernel.empty());
 }
