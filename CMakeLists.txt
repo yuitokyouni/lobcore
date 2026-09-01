@@ -14,6 +14,7 @@ add_library(lobcore STATIC
   src/book.cpp
   src/log.cpp
   src/reference_book.cpp
+  src/kernel/kernel.cpp
 )
 target_include_directories(lobcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
