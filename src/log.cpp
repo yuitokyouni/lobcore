@@ -39,6 +39,9 @@ RejectReason detect_reject_reason(const RejectCounts& before, const RejectCounts
   if (after.non_monotonic_timestamp > before.non_monotonic_timestamp) {
     return RejectReason::NonMonotonicTimestamp;
   }
+  if (after.allocation_overflow > before.allocation_overflow) {
+    return RejectReason::AllocationOverflow;
+  }
   return RejectReason::None;
 }
 
@@ -137,12 +140,19 @@ std::vector<Trade> LoggedBook::add_limit(const Order& order, Timestamp received_
   return writer_.add_limit(order, received_at, [this](const LogRecord& rec) { log_.push_back(rec); });
 }
 
+LoggedBook::LoggedBook(std::unique_ptr<AllocationRule> rule)
+    : book_(std::move(rule)), writer_(book_) {}
+
 bool LoggedBook::cancel(OrderId id, Timestamp received_at) {
   return writer_.cancel(id, received_at, [this](const LogRecord& rec) { log_.push_back(rec); });
 }
 
 OrderBook replay(const std::vector<LogRecord>& log) {
-  OrderBook book;
+  return replay(log, nullptr);
+}
+
+OrderBook replay(const std::vector<LogRecord>& log, std::unique_ptr<AllocationRule> rule) {
+  OrderBook book(std::move(rule));
   for (const auto& rec : log) {
     if (rec.kind == EventKind::Add || rec.kind == EventKind::Reject) {
       const Order order{rec.order_id, rec.side, rec.price, rec.qty, rec.decided_at};

@@ -1,14 +1,14 @@
 #include <lobcore/kernel/market.hpp>
 
 #include <lobcore/kernel/kernel.hpp>
+#include <utility>
 
 namespace lobcore {
 
 ContinuousMarket::ContinuousMarket(std::unique_ptr<AllocationRule> rule)
-    : writer_(book_), rule_(std::move(rule)) {}
+    : book_(std::move(rule)), writer_(book_) {}
 
 void ContinuousMarket::apply(const OrderMessage& msg, const Timestamp received_at) {
-  (void)rule_;
   if (const auto* add = std::get_if<AddLimit>(&msg)) {
     const Order order{add->id, add->side, add->price, add->qty, add->decided_at};
     book_.add_limit(order, received_at);
@@ -20,7 +20,6 @@ void ContinuousMarket::apply(const OrderMessage& msg, const Timestamp received_a
 }
 
 void ContinuousMarket::on_order(const OrderMessage& msg, Timestamp received_at, MarketContext& ctx) {
-  (void)rule_;
   if (const auto* add = std::get_if<AddLimit>(&msg)) {
     const Order order{add->id, add->side, add->price, add->qty, add->decided_at};
     writer_.add_limit(order, received_at, [&ctx](const LogRecord& rec) { ctx.emit(rec); });

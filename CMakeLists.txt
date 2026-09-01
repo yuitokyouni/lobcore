@@ -18,6 +18,7 @@ add_library(lobcore STATIC
   src/kernel/rng.cpp
   src/kernel/latency_model.cpp
   src/kernel/continuous_market.cpp
+  src/allocation.cpp
 )
 target_include_directories(lobcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

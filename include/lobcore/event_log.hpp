@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
+#include <lobcore/allocation.hpp>
 #include <lobcore/book.hpp>
 
 namespace lobcore {
@@ -15,6 +17,7 @@ enum class RejectReason : std::uint8_t {
   NonPositiveQty,
   DuplicateOrderId,
   NonMonotonicTimestamp,
+  AllocationOverflow,
 };
 
 struct LogRecord {
@@ -59,7 +62,7 @@ class BookEventLogWriter {
 
 class LoggedBook {
  public:
-  LoggedBook() : writer_(book_) {}
+  explicit LoggedBook(std::unique_ptr<AllocationRule> rule = nullptr);
 
   std::vector<Trade> add_limit(const Order& order, Timestamp received_at);
   bool               cancel(OrderId id, Timestamp received_at);
@@ -74,6 +77,7 @@ class LoggedBook {
 };
 
 OrderBook replay(const std::vector<LogRecord>& log);
+OrderBook replay(const std::vector<LogRecord>& log, std::unique_ptr<AllocationRule> rule);
 
 [[nodiscard]] std::uint64_t log_hash(const std::vector<LogRecord>& log) noexcept;
 

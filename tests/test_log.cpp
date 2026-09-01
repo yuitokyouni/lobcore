@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <lobcore/allocation.hpp>
 #include <lobcore/event_log.hpp>
+
+#include <limits>
 
 using namespace lobcore;
 
@@ -91,4 +94,24 @@ TEST_CASE("replay reproduces book state hash") {
   CHECK(replayed.rejects().duplicate_order_id == original.rejects().duplicate_order_id);
   CHECK(replayed.rejects().non_positive_qty == original.rejects().non_positive_qty);
   CHECK(replayed.rejects().non_monotonic_timestamp == original.rejects().non_monotonic_timestamp);
+  CHECK(replayed.rejects().allocation_overflow == original.rejects().allocation_overflow);
+}
+
+TEST_CASE("logged allocation overflow emits Reject and replays with ProRata") {
+  LoggedBook logged(std::make_unique<ProRata>());
+  const Qty large = std::numeric_limits<Qty>::max() / 2 + 1;
+  logged.add_limit(sell_at(1, 100, large, 1), 1);
+  logged.add_limit(buy_at(2, 100, 2, 2), 2);
+
+  REQUIRE(logged.log().size() == 2);
+  CHECK(logged.log()[0].kind == EventKind::Add);
+  CHECK(logged.log()[1].kind == EventKind::Reject);
+  CHECK(logged.log()[1].reason == RejectReason::AllocationOverflow);
+  CHECK(logged.log()[1].seq == 0);
+  CHECK(logged.book().rejects().allocation_overflow == 1);
+
+  const auto replayed = replay(logged.log(), std::make_unique<ProRata>());
+  CHECK(replayed.state_hash() == logged.book().state_hash());
+  CHECK(replayed.rejects().allocation_overflow == 1);
+  CHECK(replayed.locations_consistent());
 }
