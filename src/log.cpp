@@ -4,6 +4,22 @@ namespace lobcore {
 
 namespace {
 
+std::uint64_t fnv1a_byte(std::uint64_t hash, const std::uint8_t byte) {
+  hash ^= static_cast<std::uint64_t>(byte);
+  return hash * 1099511628211ULL;
+}
+
+std::uint64_t fnv1a_u64(std::uint64_t hash, const std::uint64_t value) {
+  for (int shift = 0; shift < 64; shift += 8) {
+    hash = fnv1a_byte(hash, static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+  }
+  return hash;
+}
+
+std::uint64_t fnv1a_i64(std::uint64_t hash, const std::int64_t value) {
+  return fnv1a_u64(hash, static_cast<std::uint64_t>(value));
+}
+
 void fill_best_levels(LogRecord& rec, const OrderBook& book) {
   const auto bid = book.best_bid();
   const auto ask = book.best_ask();
@@ -28,7 +44,8 @@ RejectReason detect_reject_reason(const RejectCounts& before, const RejectCounts
 
 }  // namespace
 
-std::vector<Trade> LoggedBook::add_limit(const Order& order, Timestamp received_at) {
+std::vector<Trade> BookEventLogWriter::add_limit(const Order& order, Timestamp received_at,
+                                                 const LogEmitFn& emit) {
   LogRecord snapshot{};
   fill_best_levels(snapshot, book_);
 
@@ -51,7 +68,7 @@ std::vector<Trade> LoggedBook::add_limit(const Order& order, Timestamp received_
     rec.best_bid_qty     = snapshot.best_bid_qty;
     rec.best_ask_price   = snapshot.best_ask_price;
     rec.best_ask_qty     = snapshot.best_ask_qty;
-    log_.push_back(rec);
+    emit(rec);
     return trades;
   }
 
@@ -70,7 +87,7 @@ std::vector<Trade> LoggedBook::add_limit(const Order& order, Timestamp received_
   add_rec.best_bid_qty     = snapshot.best_bid_qty;
   add_rec.best_ask_price   = snapshot.best_ask_price;
   add_rec.best_ask_qty     = snapshot.best_ask_qty;
-  log_.push_back(add_rec);
+  emit(add_rec);
 
   for (const auto& trade : trades) {
     LogRecord fill_rec{};
@@ -87,13 +104,13 @@ std::vector<Trade> LoggedBook::add_limit(const Order& order, Timestamp received_
     fill_rec.best_bid_qty     = snapshot.best_bid_qty;
     fill_rec.best_ask_price   = snapshot.best_ask_price;
     fill_rec.best_ask_qty     = snapshot.best_ask_qty;
-    log_.push_back(fill_rec);
+    emit(fill_rec);
   }
 
   return trades;
 }
 
-bool LoggedBook::cancel(OrderId id, Timestamp received_at) {
+bool BookEventLogWriter::cancel(OrderId id, Timestamp received_at, const LogEmitFn& emit) {
   LogRecord snapshot{};
   fill_best_levels(snapshot, book_);
 
@@ -112,8 +129,16 @@ bool LoggedBook::cancel(OrderId id, Timestamp received_at) {
   rec.best_bid_qty     = snapshot.best_bid_qty;
   rec.best_ask_price   = snapshot.best_ask_price;
   rec.best_ask_qty     = snapshot.best_ask_qty;
-  log_.push_back(rec);
+  emit(rec);
   return true;
+}
+
+std::vector<Trade> LoggedBook::add_limit(const Order& order, Timestamp received_at) {
+  return writer_.add_limit(order, received_at, [this](const LogRecord& rec) { log_.push_back(rec); });
+}
+
+bool LoggedBook::cancel(OrderId id, Timestamp received_at) {
+  return writer_.cancel(id, received_at, [this](const LogRecord& rec) { log_.push_back(rec); });
 }
 
 OrderBook replay(const std::vector<LogRecord>& log) {
@@ -127,6 +152,27 @@ OrderBook replay(const std::vector<LogRecord>& log) {
     }
   }
   return book;
+}
+
+std::uint64_t log_hash(const std::vector<LogRecord>& log) noexcept {
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (const auto& rec : log) {
+    hash = fnv1a_u64(hash, rec.seq);
+    hash = fnv1a_byte(hash, static_cast<std::uint8_t>(rec.kind));
+    hash = fnv1a_byte(hash, static_cast<std::uint8_t>(rec.side));
+    hash = fnv1a_byte(hash, static_cast<std::uint8_t>(rec.reason));
+    hash = fnv1a_i64(hash, rec.decided_at);
+    hash = fnv1a_i64(hash, rec.received_at);
+    hash = fnv1a_u64(hash, rec.order_id);
+    hash = fnv1a_u64(hash, rec.maker_id);
+    hash = fnv1a_i64(hash, rec.price);
+    hash = fnv1a_i64(hash, rec.qty);
+    hash = fnv1a_i64(hash, rec.best_bid_price);
+    hash = fnv1a_i64(hash, rec.best_bid_qty);
+    hash = fnv1a_i64(hash, rec.best_ask_price);
+    hash = fnv1a_i64(hash, rec.best_ask_qty);
+  }
+  return hash;
 }
 
 }  // namespace lobcore

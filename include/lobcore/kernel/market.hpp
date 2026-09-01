@@ -67,6 +67,7 @@ class ContinuousMarket final : public Market {
 
  private:
   OrderBook                       book_;
+  BookEventLogWriter              writer_;
   std::unique_ptr<AllocationRule> rule_;
 };
 
