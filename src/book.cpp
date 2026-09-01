@@ -36,6 +36,44 @@ Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
   return total;
 }
 
+const std::deque<OrderBook::RestingOrder>* OrderBook::queue_at(const Location& loc) const {
+  if (loc.side == Side::Buy) {
+    const auto level_it = bids_.find(loc.price);
+    if (level_it == bids_.end()) {
+      return nullptr;
+    }
+    return &level_it->second;
+  }
+  const auto level_it = asks_.find(loc.price);
+  if (level_it == asks_.end()) {
+    return nullptr;
+  }
+  return &level_it->second;
+}
+
+std::optional<Qty> OrderBook::qty_at_location(OrderId id, const Location& loc) const {
+  const auto* queue = queue_at(loc);
+  if (queue == nullptr) {
+    return std::nullopt;
+  }
+  for (const auto& o : *queue) {
+    if (o.id == id) {
+      return o.qty;
+    }
+  }
+  return std::nullopt;
+}
+
+bool OrderBook::is_resting_on_book(OrderId id) const {
+  const auto loc_it = locations_.find(id);
+  if (loc_it == locations_.end()) {
+    return false;
+  }
+  return qty_at_location(id, loc_it->second).has_value();
+}
+
+void OrderBook::erase_location_hint(OrderId id) const { locations_.erase(id); }
+
 std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_at) {
   // 契約違反: 高々 1 カウンタだけ増やす (qty を先に見る)。
   // 両カウンタの合計 ≠ 拒否注文数になり得る点に注意。
@@ -43,7 +81,7 @@ std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_a
     ++rejects_.non_positive_qty;
     return {};
   }
-  if (locations_.find(order.id) != locations_.end()) {
+  if (is_resting_on_book(order.id)) {
     ++rejects_.duplicate_order_id;
     return {};
   }
@@ -79,7 +117,6 @@ std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_a
       maker.qty -= fill;
       remaining_qty -= fill;
       if (maker.qty == 0) {
-        locations_.erase(maker.id);
         queue.pop_front();
         if (queue.empty()) {
           opposite_levels.erase(level_it);
@@ -121,17 +158,19 @@ bool OrderBook::cancel(OrderId id) {
         if (queue.empty()) {
           levels.erase(level_it);
         }
-        locations_.erase(loc_it);
+        erase_location_hint(id);
         return true;
       }
     }
     return false;
   };
 
-  if (loc.side == Side::Buy) {
-    return erase_from(bids_);
+  const bool removed =
+      loc.side == Side::Buy ? erase_from(bids_) : erase_from(asks_);
+  if (!removed) {
+    erase_location_hint(id);
   }
-  return erase_from(asks_);
+  return removed;
 }
 
 std::optional<Level> OrderBook::best_bid() const {
@@ -155,37 +194,20 @@ std::optional<Qty> OrderBook::remaining(OrderId id) const {
   if (loc_it == locations_.end()) {
     return std::nullopt;
   }
-  const Location& loc = loc_it->second;
-
-  const auto* queue = [&]() -> const std::deque<RestingOrder>* {
-    if (loc.side == Side::Buy) {
-      const auto level_it = bids_.find(loc.price);
-      if (level_it == bids_.end()) {
-        return nullptr;
-      }
-      return &level_it->second;
-    }
-    const auto level_it = asks_.find(loc.price);
-    if (level_it == asks_.end()) {
-      return nullptr;
-    }
-    return &level_it->second;
-  }();
-
-  if (queue == nullptr) {
+  const auto qty = qty_at_location(id, loc_it->second);
+  if (!qty.has_value()) {
+    erase_location_hint(id);
     return std::nullopt;
   }
-  for (const auto& o : *queue) {
-    if (o.id == id) {
-      return o.qty;
-    }
-  }
-  return std::nullopt;
+  return qty;
 }
 
 std::optional<Side> OrderBook::resting_side(OrderId id) const {
   const auto loc_it = locations_.find(id);
   if (loc_it == locations_.end()) {
+    return std::nullopt;
+  }
+  if (!qty_at_location(id, loc_it->second).has_value()) {
     return std::nullopt;
   }
   return loc_it->second.side;
@@ -220,14 +242,14 @@ std::uint64_t OrderBook::state_hash() const noexcept {
 }
 
 bool OrderBook::locations_consistent() const {
-  std::unordered_map<OrderId, Location> rebuilt;
-  rebuilt.reserve(locations_.size());
-
-  auto index_side = [&](const auto& levels, Side side) -> bool {
+  auto check_side = [&](const auto& levels, Side side) -> bool {
     for (const auto& [price, level] : levels) {
       for (const auto& order : level) {
-        const Location loc{side, price};
-        if (!rebuilt.emplace(order.id, loc).second) {
+        const auto it = locations_.find(order.id);
+        if (it == locations_.end()) {
+          return false;
+        }
+        if (it->second.side != side || it->second.price != price) {
           return false;
         }
       }
@@ -235,22 +257,7 @@ bool OrderBook::locations_consistent() const {
     return true;
   };
 
-  if (!index_side(bids_, Side::Buy)) {
-    return false;
-  }
-  if (!index_side(asks_, Side::Sell)) {
-    return false;
-  }
-  if (rebuilt.size() != locations_.size()) {
-    return false;
-  }
-  for (const auto& [id, loc] : locations_) {
-    const auto it = rebuilt.find(id);
-    if (it == rebuilt.end() || it->second.side != loc.side || it->second.price != loc.price) {
-      return false;
-    }
-  }
-  return true;
+  return check_side(bids_, Side::Buy) && check_side(asks_, Side::Sell);
 }
 
 }  // namespace lobcore

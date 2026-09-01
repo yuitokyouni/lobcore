@@ -91,7 +91,8 @@ class OrderBook {
     std::uint64_t seq;
   };
 
-  // OrderId → 価格レベルの位置。レベル内は線形走査する。
+  // OrderId → 価格レベルの位置ヒント。レベル内は線形走査する。
+  // 約定で消えた注文のエントリは遅延削除される場合がある。
   struct Location {
     Side  side;
     Price price;
@@ -102,9 +103,14 @@ class OrderBook {
 
   static Qty level_qty(const std::deque<RestingOrder>& level);
 
+  const std::deque<RestingOrder>* queue_at(const Location& loc) const;
+  std::optional<Qty>              qty_at_location(OrderId id, const Location& loc) const;
+  bool                            is_resting_on_book(OrderId id) const;
+  void                            erase_location_hint(OrderId id) const;
+
   BidLevels                             bids_;
   AskLevels                             asks_;
-  std::unordered_map<OrderId, Location> locations_;
+  mutable std::unordered_map<OrderId, Location> locations_;
   std::uint64_t                         next_seq_           = 0;
   Timestamp                             last_received_at_   = 0;
   bool                                  has_last_received_  = false;
