@@ -56,17 +56,27 @@ cmake --build build-rel
 上記 6 条件それぞれに **`Logged` 接尾辞** の対（`LoggedBook` 経由、ログは `std::vector<LogRecord>` 追記）がある。
 計測区間の注文数・板形状は非 Logged 版と同一。
 
-### 現状の数字（Release, 3 回 mean, 2026-09 計測）
+### 現状の数字（Release, repetitions=3 mean, min_time=0.01s, 2026-09 計測 @ struct-exp 着手前）
 
 環境依存のため絶対値より **同一マシン・同一ビルドでの比較** を優先する。
+計測は `./bench/run_bench_suite.sh ./build-rel/bench/lobcore_bench 0.01s`。
 
 | ベンチ | mean (ns/iteration) | 備考 |
 |--------|---------------------|------|
-| `BM_RestOnEmpty` | 39,741 | items/s ≈ 25.2M |
-| `BM_RestOnDeepBook` | 543,658 | |
-| `BM_CrossSingleLevel` | 401,250 | avg fills/order = 5 |
-| `BM_CrossSweep` | 380,640 | avg fills/order = 50 → **≈19.0 μs/order** |
-| `BM_CancelDeepBook` | 511,837 | |
+| `BM_RestOnEmpty` | 12,647,899 | |
+| `BM_RestOnDeepBook` | 1,833,693,623 | 板再構築込みイテレーション |
+| `BM_CrossSingleLevel` | 359,915,340 | avg fills/order = 5 |
+| `BM_CrossSweep` | 37,419,148 | avg fills/order = 50 |
+| `BM_CancelDeepBook` | 928,216 | |
+| `BM_FlashCrash` | 695,908,439 | |
+| `BM_RestOnEmptyLogged` | 13,005,323 | |
+| `BM_RestOnDeepBookLogged` | 1,860,883,889 | |
+| `BM_CrossSingleLevelLogged` | 371,992,446 | |
+| `BM_CrossSweepLogged` | 36,918,915 | **§6 採否の主指標** |
+| `BM_CancelDeepBookLogged` | 983,527 | |
+| `BM_FlashCrashLogged` | 734,346,038 | |
+
+（旧 Stage 3 単体 5 条件の数値は min_time・板規模が異なるため直接比較しない。）
 
 付帯成果物:
 
