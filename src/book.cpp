@@ -37,7 +37,10 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
       auto& queue = level_it->second;
       auto& maker = queue.front();
       const Qty fill = std::min(remaining_qty, maker.qty);
-      trades.push_back(Trade{maker.id, order.id, level_it->first, fill});
+      trades.push_back(Trade{.maker_id = maker.id,
+                               .taker_id = order.id,
+                               .price    = level_it->first,
+                               .qty      = fill});
       maker.qty -= fill;
       remaining_qty -= fill;
       if (maker.qty == 0) {
@@ -50,7 +53,7 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
     }
     if (remaining_qty > 0) {
       own_levels[order.price].push_back(
-          RestingOrder{order.id, remaining_qty, next_seq_++});
+          RestingOrder{.id = order.id, .qty = remaining_qty, .seq = next_seq_++});
       locations_[order.id] = Location{own_side, order.price};
     }
   };
