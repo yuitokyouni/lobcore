@@ -1,8 +1,32 @@
 #include <lobcore/book.hpp>
 
 #include <algorithm>
+#include <cstdint>
 
 namespace lobcore {
+
+namespace {
+
+constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
+constexpr std::uint64_t kFnvPrime        = 1099511628211ULL;
+
+std::uint64_t fnv1a_byte(std::uint64_t hash, std::uint8_t byte) {
+  hash ^= static_cast<std::uint64_t>(byte);
+  return hash * kFnvPrime;
+}
+
+std::uint64_t fnv1a_u64(std::uint64_t hash, std::uint64_t value) {
+  for (int shift = 0; shift < 64; shift += 8) {
+    hash = fnv1a_byte(hash, static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+  }
+  return hash;
+}
+
+std::uint64_t fnv1a_i64(std::uint64_t hash, std::int64_t value) {
+  return fnv1a_u64(hash, static_cast<std::uint64_t>(value));
+}
+
+}  // namespace
 
 Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
   Qty total = 0;
@@ -12,7 +36,7 @@ Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
   return total;
 }
 
-std::vector<Trade> OrderBook::add_limit(const Order& order) {
+std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_at) {
   // 契約違反: 高々 1 カウンタだけ増やす (qty を先に見る)。
   // 両カウンタの合計 ≠ 拒否注文数になり得る点に注意。
   if (order.qty <= 0) {
@@ -23,6 +47,17 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
     ++rejects_.duplicate_order_id;
     return {};
   }
+  if (has_last_received_ && received_at < last_received_at_) {
+    ++rejects_.non_monotonic_timestamp;
+    return {};
+  }
+  if (order.decided_at > received_at) {
+    ++rejects_.non_monotonic_timestamp;
+    return {};
+  }
+
+  has_last_received_  = true;
+  last_received_at_   = received_at;
 
   std::vector<Trade> trades;
   Qty remaining_qty = order.qty;
@@ -146,6 +181,76 @@ std::optional<Qty> OrderBook::remaining(OrderId id) const {
     }
   }
   return std::nullopt;
+}
+
+std::optional<Side> OrderBook::resting_side(OrderId id) const {
+  const auto loc_it = locations_.find(id);
+  if (loc_it == locations_.end()) {
+    return std::nullopt;
+  }
+  return loc_it->second.side;
+}
+
+std::uint64_t OrderBook::state_hash() const noexcept {
+  std::uint64_t hash = kFnvOffsetBasis;
+
+  for (const auto& [price, level] : bids_) {
+    hash = fnv1a_i64(hash, price);
+    for (const auto& order : level) {
+      hash = fnv1a_u64(hash, order.id);
+      hash = fnv1a_i64(hash, order.qty);
+      hash = fnv1a_u64(hash, order.seq);
+    }
+  }
+
+  for (const auto& [price, level] : asks_) {
+    hash = fnv1a_i64(hash, price);
+    for (const auto& order : level) {
+      hash = fnv1a_u64(hash, order.id);
+      hash = fnv1a_i64(hash, order.qty);
+      hash = fnv1a_u64(hash, order.seq);
+    }
+  }
+
+  hash = fnv1a_u64(hash, next_seq_);
+  hash = fnv1a_u64(hash, rejects_.duplicate_order_id);
+  hash = fnv1a_u64(hash, rejects_.non_positive_qty);
+  hash = fnv1a_u64(hash, rejects_.non_monotonic_timestamp);
+  return hash;
+}
+
+bool OrderBook::locations_consistent() const {
+  std::unordered_map<OrderId, Location> rebuilt;
+  rebuilt.reserve(locations_.size());
+
+  auto index_side = [&](const auto& levels, Side side) -> bool {
+    for (const auto& [price, level] : levels) {
+      for (const auto& order : level) {
+        const Location loc{side, price};
+        if (!rebuilt.emplace(order.id, loc).second) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  if (!index_side(bids_, Side::Buy)) {
+    return false;
+  }
+  if (!index_side(asks_, Side::Sell)) {
+    return false;
+  }
+  if (rebuilt.size() != locations_.size()) {
+    return false;
+  }
+  for (const auto& [id, loc] : locations_) {
+    const auto it = rebuilt.find(id);
+    if (it == rebuilt.end() || it->second.side != loc.side || it->second.price != loc.price) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace lobcore
