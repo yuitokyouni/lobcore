@@ -4,6 +4,7 @@
 #include <lobcore/kernel/kernel.hpp>
 #include <lobcore/kernel/market.hpp>
 #include <lobcore/kernel/order_message.hpp>
+#include <lobcore/allocation.hpp>
 
 #include <memory>
 
@@ -116,6 +117,7 @@ TEST_CASE("ContinuousMarket matches OrderBook for a sample sequence") {
   CHECK(market.rejects().duplicate_order_id == book.rejects().duplicate_order_id);
   CHECK(market.rejects().non_positive_qty == book.rejects().non_positive_qty);
   CHECK(market.rejects().non_monotonic_timestamp == book.rejects().non_monotonic_timestamp);
+  CHECK(market.rejects().allocation_overflow == book.rejects().allocation_overflow);
 }
 
 TEST_CASE("Kernel delivers submitted orders after latency delay") {
@@ -161,13 +163,28 @@ TEST_CASE("LatencyModel rejects zero agent delay") {
   CHECK_THROWS_AS(model.set_agent_delay(0, 0), std::invalid_argument);
 }
 
-TEST_CASE("PriceTimePriority ContinuousMarket preserves default book behavior") {
-  ContinuousMarket default_market;
-  ContinuousMarket explicit_market(std::make_unique<PriceTimePriority>());
+TEST_CASE("ContinuousMarket with ProRata matches OrderBook for a sample sequence") {
+  OrderBook book(std::make_unique<ProRata>());
+  ContinuousMarket market(std::make_unique<ProRata>());
 
-  const AddLimit msg = buy_msg(1, 100, 10);
-  default_market.apply(msg, 1);
-  explicit_market.apply(msg, 1);
+  const auto step = [&](Timestamp t, const OrderMessage& msg) {
+    if (const auto* add = std::get_if<AddLimit>(&msg)) {
+      const Order order{add->id, add->side, add->price, add->qty, t};
+      book.add_limit(order, t);
+      market.apply(msg, t);
+      return;
+    }
+    if (const auto* cancel = std::get_if<CancelOrder>(&msg)) {
+      book.cancel(cancel->id);
+      market.apply(msg, t);
+    }
+  };
 
-  CHECK(default_market.state_hash() == explicit_market.state_hash());
+  step(1, sell_msg(1, 100, 10));
+  step(2, sell_msg(2, 100, 10));
+  step(3, buy_msg(3, 100, 15));
+
+  CHECK(market.best_bid() == book.best_bid());
+  CHECK(market.best_ask() == book.best_ask());
+  CHECK(market.state_hash() == book.state_hash());
 }
