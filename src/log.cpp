@@ -119,7 +119,7 @@ bool LoggedBook::cancel(OrderId id, Timestamp received_at) {
 OrderBook replay(const std::vector<LogRecord>& log) {
   OrderBook book;
   for (const auto& rec : log) {
-    if (rec.kind == EventKind::Add) {
+    if (rec.kind == EventKind::Add || rec.kind == EventKind::Reject) {
       const Order order{rec.order_id, rec.side, rec.price, rec.qty, rec.decided_at};
       book.add_limit(order, rec.received_at);
     } else if (rec.kind == EventKind::Cancel) {
