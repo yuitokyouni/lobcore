@@ -182,18 +182,144 @@ Stage 3 で確認したこと:
 
 ---
 
-## 6. 残っているボトルネックと Stage 4 以降
+## 6. 構造変更実験計画（ドラフト）
 
-Callgrind（CrossSweep 計測区間, eager erase 現行実装）の目安:
+Stage 4（市場核・`ContinuousMarket`・`AllocationRule`・ログ replay・再現性テスト）が
+`main` に入った時点で、次の性能改善は **板の内部表現の置き換え** に絞れる。
+§4 の pmr と遅延削除は Ir やシミュレーション上のキャッシュミスを動かしても
+`lobcore_bench` の壁時計は動かなかった。残ボトルネックは allocator と
+`std::map` / `std::deque` のノード追跡であり、ここを変えない限り実時間は律速し続ける。
 
-- allocator ≈ 58% of `add_limit` inclusive
-- `locations_` ≈ 15%
-- `add_limit` body exclusive ≈ 19%
+本節は **実装着手前の実験計画** である。人間の承認後に初めてコードを変える。
 
-allocator チューニング（pmr・遅延削除）では実時間が動かなかった。
-次に効きそうなのは **データ構造そのもの**（単一バッファ、SoA、価格レベルの連続配置など。
-WK Selph の指摘と同型）だが、Stage 4 の市場核・複数銘柄・配分規則の実験規模が
-見えてから判断する。**Stage 3 では構造変更は行わない。**
+### 6.1 仮説
+
+| ID | 仮説 | 根拠 |
+|----|------|------|
+| H1 | 価格レベルと注文を **連続メモリ**（単一バッファまたは SoA）に載せ替えると、`BM_CrossSweep` / `BM_CrossSingleLevel` の壁時計が改善する | Callgrind で allocator ≈ 58%、`locations_` ≈ 15%。各 fill で反対側 best レベルへポインタを辿るコストが支配的 |
+| H2 | H1 が成立しても `BM_RestOnEmpty` / `BM_CancelDeepBook` は横ばい〜微改善に留まる可能性がある | 深い板・スイープ以外は map 探索や cancel 経路が別律速 |
+| H3 | ログ書き込みを含めたベンチでも H1 の改善が残る | Stage 2 以降の本番経路は `BookEventLogWriter` 経由。板だけ速くてもログ追記が律速なら意味が薄い |
+
+**採用判断は H3 を満たす計測でのみ行う。** Callgrind Ir の改善だけでは採用しない（§5 教訓）。
+
+### 6.2 現行ボトルネック（ベースライン）
+
+Callgrind（CrossSweep 計測区間, eager erase, `main` @ Stage 3 計測時）:
+
+| バケット | `add_limit` inclusive に占める割合 |
+|----------|-----------------------------------|
+| allocator | ≈ 58% |
+| `locations_` | ≈ 15% |
+| `add_limit` body (exclusive) | ≈ 19% |
+
+壁時計ベースライン（§2 の 5 条件, Release, 同一マシン比較用）:
+
+| ベンチ | mean (ns/iteration) |
+|--------|---------------------|
+| `BM_RestOnEmpty` | 39,741 |
+| `BM_RestOnDeepBook` | 543,658 |
+| `BM_CrossSingleLevel` | 401,250 |
+| `BM_CrossSweep` | 380,640 |
+| `BM_CancelDeepBook` | 511,837 |
+
+構造変更 PR では **変更前後を同一マシン・同一 `lobcore_bench` バイナリ** で再計測し、
+表を更新する。絶対値より差分を記録する。
+
+### 6.3 前提: ベンチが本番経路を通すこと
+
+現行 `bench/bench_book.cpp` は素の `OrderBook` のみを計測している。
+`LoggedBook` / `BookEventLogWriter` / `LogRecord` 追記は含まれない。
+
+**構造変更実験の着手条件:**
+
+1. `lobcore_bench` に **ログ書き込み付き** のベンチを追加する（既存 5 条件と対になる命名。
+   例: `BM_CrossSweepLogged`）。計測区間の注文数・板形状は既存と同一に保つ。
+2. ログは `std::vector<LogRecord>` への追記とする（ファイル I/O は含めない）。
+   ディスクは別問題として Stage 5 以降で切り出す。
+3. 参照実装との差分テスト（`test_diff.cpp`）は **引き続き素の `OrderBook`** で走らせる。
+   構造変更後も `OrderBook` の公開 API とセマンティクスは不変。
+
+ログ付きベンチが入るまで、構造変更の採否判断は行わない。
+
+### 6.4 候補する構造（実装案は 1 つずつ）
+
+一度に複数を混ぜない。各案は独立 PR とし、却下されたら revert して次へ。
+
+| 案 | 概要 | 主に効かせたいベンチ | リスク |
+|----|------|----------------------|--------|
+| A | 価格レベル配列 + レベル内 FIFO キュー（連続 `Order` スロット、free list） | CrossSweep, CrossSingleLevel | `OrderId` 検索・cancel の O(?) 設計。copy/move のコスト |
+| B | SoA（price / qty / seq / side を別配列）+ 価格インデックス | 同上 | 配分規則（ProRata）との接続。可読性低下 |
+| C | best レベルへのキャッシュ（bid/ask 先頭ポインタ）を A/B と併用 | RestOnDeepBook, Cross* | キャッシュ整合のバグ。単独では allocator 問題は残る |
+
+案 A を第一候補とする。B・C は A の結果を見てから。
+
+**スコープ外（本実験ではやらない）:**
+
+- 浮動小数点の導入、価格・数量の非整数化
+- `tests/test_book.cpp` の仕様変更
+- 配分規則アルゴリズムの変更（FIFO / ProRata の結果は不変であること）
+- マルチ銘柄・`Kernel` 統合ベンチ（板単体が速くなってから）
+
+### 6.5 実験手順（1 案あたり）
+
+1. **赤:** 構造変更後も `ctest` 全通過（特に `test_diff`, `test_move`, `test_pro_rata`, `test_repro`）。
+2. **計測（必須）:** Release で `lobcore_bench` を 3 回実行し、5 条件 + ログ付き 5 条件の mean を記録。
+3. **計測（任意・参考）:** `cross_sweep_profile` + Callgrind Ir / `--simulate-cache=yes`。
+   採否には使わないが、Ir が大きく動いて壁時計が動かない場合は §5 と同型の失敗として記録。
+4. **文書化:** 本節のベースライン表を更新し、PR 説明に before/after を貼る。
+
+### 6.6 合格基準（採用）
+
+すべてを満たすこと:
+
+| # | 条件 |
+|---|------|
+| C1 | `ctest`（Debug, ASan/UBSan）全通過 |
+| C2 | `ReferenceBook` 差分テストが新実装でも一致 |
+| C3 | **`lobcore_bench` の壁時計** で、ログ付き `BM_CrossSweep` の mean がベースライン比 **≥ 5% 改善**（同一マシン、3 回 mean） |
+| C4 | ログ付き `BM_CrossSingleLevel` も **横ばい以上**（悪化 ≤ 2%）。C3 だけが良く他が壊れる案は不採用 |
+| C5 | `test_move.cpp`（copy/move/replay 返却）が通過。反実仮想・replay の前提を壊さない |
+
+C3 の 5% は初期閾値。改善が 3–4% で再現性が高い場合は人間判断でよいが、
+**1–2% の揺らぎは採用しない**（§4.2 の lazy erase が +1.5% 悪化した先例）。
+
+### 6.7 却下・revert 基準
+
+- C1–C2 のいずれか失敗 → 即 revert。仕様合わせのためのテスト改変はしない。
+- Callgrind Ir が大きく改善しても C3 未達 → revert（§5 教訓どおり）。
+- C3 達成でも C4 で Cancel が **> 5% 悪化** → revert または案の縮小。cancel は実験で重要な経路。
+- copy/move が O(n) 化し `test_move` や replay 性能要件に抵触 → revert。
+
+### 6.8 実装順序（承認後）
+
+```
+[1] ログ付きベンチ追加（bench のみ、挙動変更なし）
+[2] 案 A 実装 + 計測 + PR
+[3] 案 A 不採用なら revert → 案 B を同手順で
+[4] 採用案を reference 実装のまま残す（削除しない）
+```
+
+Stage 5（Python / Config / 実験メタデータのログヘッダ）は本実験と並行してよいが、
+**構造変更の採否は Stage 5 の有無に依存しない。**
+
+### 6.9 記録テンプレート（PR 用）
+
+```markdown
+## 構造変更: 案 A
+
+### 壁時計 (lobcore_bench, Release, 3-run mean)
+| ベンチ | before (ns) | after (ns) | delta |
+|--------|-------------|------------|-------|
+| BM_CrossSweepLogged | | | |
+| ... | | | |
+
+### 正しさ
+- [ ] ctest Debug 全通過
+- [ ] test_diff / test_pro_rata / test_repro
+
+### Callgrind（参考）
+- Ir: ... → ... (計測区間のみ。採否には不使用)
+```
 
 ---
 
@@ -202,4 +328,4 @@ WK Selph の指摘と同型）だが、Stage 4 の市場核・複数銘柄・配
 - 参照実装との差分テスト、5 条件ベンチ、プロファイル手順を整備した
 - pmr と遅延削除は計測に基づき revert し、理由をコミットログに残した
 - 「何が効かなかったか」と「何がまだ遅いか」を文書化した
-- 構造変更は Stage 4 のスコープ確定後に再検討する
+- 構造変更の実験計画は §6 にまとめた（実装は計画承認・ログ付きベンチ追加後）
