@@ -63,6 +63,7 @@ struct RejectCounts {
 // 未決定事項 (自分で決めてテストを足す):
 //   - 同一 ID が cancel 後に再利用されたときの扱い
 class LoggedBook;
+class BookEventLogWriter;
 
 class OrderBook {
  public:
@@ -86,6 +87,7 @@ class OrderBook {
 
  private:
   friend class LoggedBook;
+  friend class BookEventLogWriter;
 
   std::optional<Side> resting_side(OrderId id) const;
   // 板に載っている注文。seq は到着順 (時間優先) の内部連番。

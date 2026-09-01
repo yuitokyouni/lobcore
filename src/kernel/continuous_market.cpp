@@ -4,7 +4,8 @@
 
 namespace lobcore {
 
-ContinuousMarket::ContinuousMarket(std::unique_ptr<AllocationRule> rule) : rule_(std::move(rule)) {}
+ContinuousMarket::ContinuousMarket(std::unique_ptr<AllocationRule> rule)
+    : writer_(book_), rule_(std::move(rule)) {}
 
 void ContinuousMarket::apply(const OrderMessage& msg, const Timestamp received_at) {
   (void)rule_;
@@ -18,8 +19,16 @@ void ContinuousMarket::apply(const OrderMessage& msg, const Timestamp received_a
   }
 }
 
-void ContinuousMarket::on_order(const OrderMessage& msg, Timestamp received_at, MarketContext& /*ctx*/) {
-  apply(msg, received_at);
+void ContinuousMarket::on_order(const OrderMessage& msg, Timestamp received_at, MarketContext& ctx) {
+  (void)rule_;
+  if (const auto* add = std::get_if<AddLimit>(&msg)) {
+    const Order order{add->id, add->side, add->price, add->qty, add->decided_at};
+    writer_.add_limit(order, received_at, [&ctx](const LogRecord& rec) { ctx.emit(rec); });
+    return;
+  }
+  if (const auto* cancel = std::get_if<CancelOrder>(&msg)) {
+    writer_.cancel(cancel->id, received_at, [&ctx](const LogRecord& rec) { ctx.emit(rec); });
+  }
 }
 
 void ContinuousMarket::on_time(MarketTimerId /*timer*/, Timestamp /*time*/, MarketContext& /*ctx*/) {}
