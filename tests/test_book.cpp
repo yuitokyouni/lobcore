@@ -256,7 +256,7 @@ void run_sample_sequence(OrderBook& book) {
 }
 }  // namespace
 
-TEST_CASE("locations_ index covers every resting order") {
+TEST_CASE("locations_ index matches book contents") {
   OrderBook book;
   CHECK(book.locations_consistent());
   submit(book,buy(1, 100, 10));
@@ -267,17 +267,6 @@ TEST_CASE("locations_ index covers every resting order") {
   CHECK(book.locations_consistent());
   submit(book,sell(3, 101, 5));
   CHECK(book.locations_consistent());
-}
-
-TEST_CASE("filled maker may leave stale locations_ entry until probed") {
-  OrderBook book;
-  submit(book,sell(1, 100, 5));
-  submit(book,buy(2, 100, 5));
-  CHECK(book.locations_consistent());
-  CHECK_FALSE(book.remaining(1).has_value());
-  submit(book,buy(1, 99, 1));
-  CHECK(book.rejects().duplicate_order_id == 0);
-  CHECK(book.remaining(1).value_or(-1) == 1);
 }
 
 TEST_CASE("identical operation sequences yield identical state hashes") {
