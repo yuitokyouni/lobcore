@@ -36,6 +36,12 @@ Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
   return total;
 }
 
+OrderBook::OrderBook() : rule_(std::make_shared<PriceTimePriority>()) {}
+
+OrderBook::OrderBook(std::unique_ptr<AllocationRule> rule)
+    : rule_(rule ? std::shared_ptr<AllocationRule>(std::move(rule))
+                 : std::make_shared<PriceTimePriority>()) {}
+
 std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_at) {
   // 契約違反: 高々 1 カウンタだけ増やす (qty を先に見る)。
   // 両カウンタの合計 ≠ 拒否注文数になり得る点に注意。
@@ -216,6 +222,7 @@ std::uint64_t OrderBook::state_hash() const noexcept {
   hash = fnv1a_u64(hash, rejects_.duplicate_order_id);
   hash = fnv1a_u64(hash, rejects_.non_positive_qty);
   hash = fnv1a_u64(hash, rejects_.non_monotonic_timestamp);
+  hash = fnv1a_u64(hash, rejects_.allocation_overflow);
   return hash;
 }
 

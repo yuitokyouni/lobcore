@@ -216,6 +216,7 @@ std::uint64_t ReferenceBook::state_hash() const noexcept {
   hash = fnv1a_u64(hash, rejects_.duplicate_order_id);
   hash = fnv1a_u64(hash, rejects_.non_positive_qty);
   hash = fnv1a_u64(hash, rejects_.non_monotonic_timestamp);
+  hash = fnv1a_u64(hash, rejects_.allocation_overflow);
   return hash;
 }
 

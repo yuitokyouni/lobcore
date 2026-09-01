@@ -3,10 +3,12 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <vector>
 
+#include <lobcore/kernel/allocation_rule.hpp>
 #include <lobcore/types.hpp>
 
 namespace lobcore {
@@ -47,9 +49,11 @@ struct RejectCounts {
   std::uint64_t duplicate_order_id       = 0;
   std::uint64_t non_positive_qty         = 0;
   std::uint64_t non_monotonic_timestamp  = 0;
+  // Pro-rata 按分で T * qi が int64 に収まらないときに増える。
+  std::uint64_t allocation_overflow      = 0;
 };
 
-// 単一銘柄・価格時間優先 (price-time priority) の板。
+// 単一銘柄の板。既定の配分規則は価格時間優先 (PriceTimePriority)。
 //
 // 仕様 (tests/test_book.cpp がこの仕様の実行可能な定義):
 //   - add_limit: 反対側の板と価格が交差する限り、価格優先 → 同一価格なら到着順で
@@ -62,11 +66,19 @@ struct RejectCounts {
 //
 // 未決定事項 (自分で決めてテストを足す):
 //   - 同一 ID が cancel 後に再利用されたときの扱い
+//
+// Pro-rata (tests/test_pro_rata.cpp):
+//   - 同一価格レベル内で数量比に按分。端数は最大剰余法、rem 同点は seq 昇順。
+//   - 按分の分子はマッチ時点の残数量 qi。
+//   - 各 (T * qi) およびレベル合計 Q は int64 に収まること。溢れれば allocation_overflow で拒否。
 class LoggedBook;
 class BookEventLogWriter;
 
 class OrderBook {
  public:
+  OrderBook();
+  explicit OrderBook(std::unique_ptr<AllocationRule> rule);
+
   // 発生した約定を返す。残数量は板に載る。
   // 契約違反なら空を返し、板は変えない。
   std::vector<Trade> add_limit(const Order& order, Timestamp received_at);
@@ -115,6 +127,7 @@ class OrderBook {
   Timestamp                             last_received_at_   = 0;
   bool                                  has_last_received_  = false;
   RejectCounts                          rejects_{};
+  std::shared_ptr<AllocationRule>       rule_;
 };
 
 }  // namespace lobcore
