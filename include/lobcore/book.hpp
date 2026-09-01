@@ -13,10 +13,11 @@ namespace lobcore {
 
 // 入力となる注文。qty は「残数量」の初期値。
 struct Order {
-  OrderId id;
-  Side    side;
-  Price   price;
-  Qty     qty;
+  OrderId   id;
+  Side      side;
+  Price     price;
+  Qty       qty;
+  Timestamp decided_at = 0;  // エージェントが発注を決めた時刻
 };
 
 // 約定 1 件。maker = 板に載っていた側、taker = 今来た側。
@@ -39,8 +40,9 @@ struct Level {
 // したがって両カウンタの合計は、拒否された注文数と一致しない場合がある
 // (qty <= 0 かつ ID 重複の注文は non_positive_qty だけが増える)。
 struct RejectCounts {
-  std::uint64_t duplicate_order_id = 0;
-  std::uint64_t non_positive_qty   = 0;
+  std::uint64_t duplicate_order_id       = 0;
+  std::uint64_t non_positive_qty         = 0;
+  std::uint64_t non_monotonic_timestamp  = 0;
 };
 
 // 単一銘柄・価格時間優先 (price-time priority) の板。
@@ -60,7 +62,12 @@ class OrderBook {
  public:
   // 発生した約定を返す。残数量は板に載る。
   // 契約違反なら空を返し、板は変えない。
-  std::vector<Trade> add_limit(const Order& order);
+  std::vector<Trade> add_limit(const Order& order, Timestamp received_at);
+
+  // Stage 1 互換: received_at = decided_at。
+  std::vector<Trade> add_limit(const Order& order) {
+    return add_limit(order, order.decided_at);
+  }
 
   // 取り除けたら true。見つからなければ false。
   bool cancel(OrderId id);
@@ -95,7 +102,9 @@ class OrderBook {
   BidLevels                             bids_;
   AskLevels                             asks_;
   std::unordered_map<OrderId, Location> locations_;
-  std::uint64_t                         next_seq_ = 0;
+  std::uint64_t                         next_seq_           = 0;
+  Timestamp                             last_received_at_   = 0;
+  bool                                  has_last_received_  = false;
   RejectCounts                          rejects_{};
 };
 

@@ -16,12 +16,15 @@ static void BM_AddLimit(benchmark::State& state) {
   std::bernoulli_distribution is_buy(0.5);
 
   lobcore::OrderBook book;
-  lobcore::OrderId next_id = 1;
+  lobcore::OrderId   next_id = 1;
+  lobcore::Timestamp next_ts = 1;
 
   for (auto _ : state) {
-    lobcore::Order o{next_id++, is_buy(rng) ? lobcore::Side::Buy : lobcore::Side::Sell,
-                     price(rng), qty(rng)};
-    auto trades = book.add_limit(o);
+    const lobcore::Timestamp ts = next_ts++;
+    lobcore::Order           o{next_id++,
+                     is_buy(rng) ? lobcore::Side::Buy : lobcore::Side::Sell, price(rng),
+                     qty(rng), ts};
+    auto trades = book.add_limit(o, ts);
     benchmark::DoNotOptimize(trades);
   }
   state.SetItemsProcessed(static_cast<int64_t>(state.iterations()));

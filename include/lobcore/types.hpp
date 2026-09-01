@@ -8,8 +8,9 @@ namespace lobcore {
 //   - 比較 (==, <) が厳密に決まる
 //   - 決定論的リプレイ (Stage 2) で丸め誤差の問題が起きない
 //   - 実価格 = ticks * tick_size は境界で一度だけ変換する
-using Price = std::int64_t;
-using Qty   = std::int64_t;
+using Price     = std::int64_t;
+using Qty       = std::int64_t;
+using Timestamp = std::int64_t;
 
 // 注文 ID は呼び出し側 (将来はシミュレータ核) が付番する。
 using OrderId = std::uint64_t;

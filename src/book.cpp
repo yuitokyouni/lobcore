@@ -12,7 +12,7 @@ Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
   return total;
 }
 
-std::vector<Trade> OrderBook::add_limit(const Order& order) {
+std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_at) {
   // 契約違反: 高々 1 カウンタだけ増やす (qty を先に見る)。
   // 両カウンタの合計 ≠ 拒否注文数になり得る点に注意。
   if (order.qty <= 0) {
@@ -23,6 +23,17 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
     ++rejects_.duplicate_order_id;
     return {};
   }
+  if (has_last_received_ && received_at < last_received_at_) {
+    ++rejects_.non_monotonic_timestamp;
+    return {};
+  }
+  if (order.decided_at > received_at) {
+    ++rejects_.non_monotonic_timestamp;
+    return {};
+  }
+
+  has_last_received_  = true;
+  last_received_at_   = received_at;
 
   std::vector<Trade> trades;
   Qty remaining_qty = order.qty;

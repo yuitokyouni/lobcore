@@ -3,11 +3,28 @@
 
 #include <lobcore/book.hpp>
 
+#include "test_support.hpp"
+
 using namespace lobcore;
 
 namespace {
-Order buy(OrderId id, Price p, Qty q) { return Order{id, Side::Buy, p, q}; }
-Order sell(OrderId id, Price p, Qty q) { return Order{id, Side::Sell, p, q}; }
+Order buy(OrderId id, Price p, Qty q) {
+  const Timestamp t = test_support::next_timestamp();
+  return Order{id, Side::Buy, p, q, t};
+}
+
+Order sell(OrderId id, Price p, Qty q) {
+  const Timestamp t = test_support::next_timestamp();
+  return Order{id, Side::Sell, p, q, t};
+}
+
+Order buy_at(OrderId id, Price p, Qty q, Timestamp decided_at) {
+  return Order{id, Side::Buy, p, q, decided_at};
+}
+
+Order sell_at(OrderId id, Price p, Qty q, Timestamp decided_at) {
+  return Order{id, Side::Sell, p, q, decided_at};
+}
 }  // namespace
 
 TEST_CASE("empty book has no best levels") {
@@ -190,4 +207,37 @@ TEST_CASE("current behavior (undecided): OrderId may be reused after cancel") {
   CHECK(book.remaining(1).value_or(-1) == 7);
   CHECK(book.best_bid()->price == 101);
   CHECK(book.best_bid()->qty == 7);
+}
+
+TEST_CASE("non-monotonic received_at is rejected") {
+  OrderBook book;
+  book.add_limit(buy_at(1, 100, 10, 1), 1);
+
+  auto trades = book.add_limit(buy_at(2, 100, 5, 2), 0);
+  CHECK(trades.empty());
+  CHECK(book.rejects().non_monotonic_timestamp == 1);
+  CHECK(book.rejects().non_positive_qty == 0);
+  CHECK(book.rejects().duplicate_order_id == 0);
+  CHECK(book.remaining(1).value_or(-1) == 10);
+  CHECK_FALSE(book.remaining(2).has_value());
+}
+
+TEST_CASE("decided_at after received_at is rejected") {
+  OrderBook book;
+
+  auto trades = book.add_limit(buy_at(1, 100, 10, 10), 5);
+  CHECK(trades.empty());
+  CHECK(book.rejects().non_monotonic_timestamp == 1);
+  CHECK_FALSE(book.best_bid().has_value());
+}
+
+TEST_CASE("decided_at reversal is allowed") {
+  OrderBook book;
+  book.add_limit(buy_at(1, 100, 10, 20), 20);
+
+  auto trades = book.add_limit(buy_at(2, 101, 5, 10), 21);
+  CHECK(trades.empty());
+  CHECK(book.rejects().non_monotonic_timestamp == 0);
+  CHECK(book.remaining(1).value_or(-1) == 10);
+  CHECK(book.remaining(2).value_or(-1) == 5);
 }
