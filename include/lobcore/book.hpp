@@ -80,6 +80,9 @@ class OrderBook {
 
   RejectCounts rejects() const noexcept { return rejects_; }
 
+  std::uint64_t state_hash() const noexcept;
+  bool          locations_consistent() const;
+
  private:
   // 板に載っている注文。seq は到着順 (時間優先) の内部連番。
   struct RestingOrder {

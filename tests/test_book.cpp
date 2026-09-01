@@ -241,3 +241,42 @@ TEST_CASE("decided_at reversal is allowed") {
   CHECK(book.remaining(1).value_or(-1) == 10);
   CHECK(book.remaining(2).value_or(-1) == 5);
 }
+
+namespace {
+void run_sample_sequence(OrderBook& book) {
+  book.add_limit(buy(1, 100, 10));
+  book.add_limit(sell(2, 100, 4));
+  book.add_limit(buy(3, 99, 5));
+  book.cancel(1);
+  book.add_limit(sell_at(4, 101, 3, 50));
+}
+}  // namespace
+
+TEST_CASE("locations_ index matches book contents") {
+  OrderBook book;
+  CHECK(book.locations_consistent());
+  book.add_limit(buy(1, 100, 10));
+  CHECK(book.locations_consistent());
+  book.add_limit(sell(2, 100, 4));
+  CHECK(book.locations_consistent());
+  book.cancel(1);
+  CHECK(book.locations_consistent());
+  book.add_limit(sell(3, 101, 5));
+  CHECK(book.locations_consistent());
+}
+
+TEST_CASE("identical operation sequences yield identical state hashes") {
+  OrderBook a;
+  OrderBook b;
+  run_sample_sequence(a);
+  run_sample_sequence(b);
+  CHECK(a.state_hash() == b.state_hash());
+}
+
+TEST_CASE("differing operation sequences yield different state hashes") {
+  OrderBook a;
+  OrderBook b;
+  a.add_limit(buy(1, 100, 10));
+  b.add_limit(buy(1, 100, 11));
+  CHECK(a.state_hash() != b.state_hash());
+}
