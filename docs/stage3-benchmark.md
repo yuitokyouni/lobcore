@@ -347,6 +347,26 @@ Stage 5（Python / Config / 実験メタデータのログヘッダ）は本実�
 - Ir: ... → ... (計測区間のみ。採否には不使用)
 ```
 
+### 6.10 実験結果（2026-09）
+
+計測: `./bench/run_bench_suite.sh ./build-rel/bench/lobcore_bench 0.01s`（repetitions=3 mean）。
+ベースラインは `main` @ PR #13 直後（`std::map` + `std::deque`）。
+
+#### 案 A: 価格レベル配列 + FIFO プール + 占有ビットマップ — **採用**
+
+| ベンチ | before (ns) | after (ns) | delta | 判定 |
+|--------|-------------|------------|-------|------|
+| `BM_CrossSweepLogged` | 36,918,915 | 17,818,941 | **−51.7%** | C3 ✓ |
+| `BM_CrossSingleLevelLogged` | 371,992,446 | 179,815,388 | −51.7% | C4 ✓ |
+| `BM_CancelDeepBookLogged` | 983,527 | 665,857 | −32.3% | ✓ |
+| `BM_FlashCrashLogged` | 734,346,038 | 348,165,345 | −52.6% | C6 ✓ |
+
+- C1–C2, C5: `ctest` 69/69、`test_diff` 一致、`test_move` 通過
+- 案 B・C は未実施（案 A が全基準を満たしたため）
+
+実装: `include/lobcore/detail/dense_book_side.hpp`, `src/dense_book_side.cpp`。
+`OrderBook` の公開 API は不変。`ReferenceBook`（map+deque）は差分テスト用に維持。
+
 ---
 
 ## 7. Stage 3 の区切り

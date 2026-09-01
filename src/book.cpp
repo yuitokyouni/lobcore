@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace lobcore {
@@ -27,17 +28,8 @@ std::uint64_t fnv1a_i64(std::uint64_t hash, std::int64_t value) {
   return fnv1a_u64(hash, static_cast<std::uint64_t>(value));
 }
 
-}  // namespace
-
-Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
-  Qty total = 0;
-  for (const auto& o : level) {
-    total += o.qty;
-  }
-  return total;
-}
-
-std::vector<LevelMaker> OrderBook::makers_from_level(const std::deque<RestingOrder>& level) {
+std::vector<LevelMaker> makers_from_level(
+    const std::vector<detail::DenseBookSide::RestingOrder>& level) {
   std::vector<LevelMaker> makers;
   makers.reserve(level.size());
   for (const auto& order : level) {
@@ -46,44 +38,17 @@ std::vector<LevelMaker> OrderBook::makers_from_level(const std::deque<RestingOrd
   return makers;
 }
 
-void OrderBook::apply_level_allocation(std::deque<RestingOrder>& queue,
-                                       const AllocateResult&     allocation,
-                                       const Price               price,
-                                       const OrderId             taker_id,
-                                       std::vector<Trade>&       trades,
-                                       std::unordered_map<OrderId, Location>& locations) {
-  for (const LevelFill& fill : allocation.fills) {
-    trades.push_back(Trade{.maker_id = fill.maker_id,
-                           .taker_id = taker_id,
-                           .price    = price,
-                           .qty      = fill.qty});
-    for (auto& maker : queue) {
-      if (maker.id == fill.maker_id) {
-        maker.qty -= fill.qty;
-        break;
-      }
-    }
-  }
+}  // namespace
 
-  for (auto it = queue.begin(); it != queue.end();) {
-    if (it->qty == 0) {
-      locations.erase(it->id);
-      it = queue.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-OrderBook::OrderBook() : rule_(std::make_shared<PriceTimePriority>()) {}
+OrderBook::OrderBook() : bids_(true), asks_(false), rule_(std::make_shared<PriceTimePriority>()) {}
 
 OrderBook::OrderBook(std::unique_ptr<AllocationRule> rule)
-    : rule_(rule ? std::shared_ptr<AllocationRule>(std::move(rule))
+    : bids_(true),
+      asks_(false),
+      rule_(rule ? std::shared_ptr<AllocationRule>(std::move(rule))
                  : std::make_shared<PriceTimePriority>()) {}
 
 std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_at) {
-  // 契約違反: 高々 1 カウンタだけ増やす (qty を先に見る)。
-  // 両カウンタの合計 ≠ 拒否注文数になり得る点に注意。
   if (order.qty <= 0) {
     ++rejects_.non_positive_qty;
     return {};
@@ -110,19 +75,19 @@ std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_a
   Qty                remaining_qty = order.qty;
   bool               overflow    = false;
 
-  auto match_and_rest = [&](auto& opposite_levels, auto& own_levels, Side own_side,
-                            auto stop_crossing) {
-    while (remaining_qty > 0 && !opposite_levels.empty()) {
-      auto level_it = opposite_levels.begin();
-      if (stop_crossing(level_it->first, order.price)) {
+  auto match_and_rest = [&](detail::DenseBookSide& opposite, detail::DenseBookSide& own,
+                            Side own_side, auto stop_crossing) {
+    while (remaining_qty > 0) {
+      const auto best = opposite.best_price();
+      if (!best || stop_crossing(*best, order.price)) {
         break;
       }
 
-      auto&       queue       = level_it->second;
-      const Price price       = level_it->first;
-      const Qty   level_total = level_qty(queue);
+      const Price price       = *best;
+      const auto  makers_vec  = opposite.makers_at(price);
+      const Qty   level_total = opposite.level_qty_at(price);
       const Qty   take        = std::min(remaining_qty, level_total);
-      const auto  makers      = makers_from_level(queue);
+      const auto  makers      = makers_from_level(makers_vec);
 
       const AllocateResult allocation =
           rule_->allocate_level(makers.data(), makers.size(), take);
@@ -131,16 +96,27 @@ std::vector<Trade> OrderBook::add_limit(const Order& order, Timestamp received_a
         return;
       }
 
-      apply_level_allocation(queue, allocation, price, order.id, trades, locations_);
-      remaining_qty -= take;
-      if (queue.empty()) {
-        opposite_levels.erase(level_it);
+      std::vector<std::pair<OrderId, Qty>> fill_pairs;
+      fill_pairs.reserve(allocation.fills.size());
+      for (const LevelFill& fill : allocation.fills) {
+        trades.push_back(Trade{.maker_id = fill.maker_id,
+                               .taker_id = order.id,
+                               .price    = price,
+                               .qty      = fill.qty});
+        fill_pairs.emplace_back(fill.maker_id, fill.qty);
+        for (const auto& maker : makers_vec) {
+          if (maker.id == fill.maker_id && maker.qty == fill.qty) {
+            locations_.erase(fill.maker_id);
+            break;
+          }
+        }
       }
+      opposite.apply_fills(price, fill_pairs);
+      remaining_qty -= take;
     }
 
     if (!overflow && remaining_qty > 0) {
-      own_levels[order.price].push_back(
-          RestingOrder{.id = order.id, .qty = remaining_qty, .seq = next_seq_++});
+      own.add_resting(order.id, order.price, remaining_qty, next_seq_++);
       locations_[order.id] = Location{own_side, order.price};
     }
   };
@@ -171,45 +147,28 @@ bool OrderBook::cancel(OrderId id) {
   }
   const Location loc = loc_it->second;
 
-  auto erase_from = [&](auto& levels) {
-    auto level_it = levels.find(loc.price);
-    if (level_it == levels.end()) {
-      return false;
-    }
-    auto& queue = level_it->second;
-    for (auto it = queue.begin(); it != queue.end(); ++it) {
-      if (it->id == id) {
-        queue.erase(it);
-        if (queue.empty()) {
-          levels.erase(level_it);
-        }
-        locations_.erase(loc_it);
-        return true;
-      }
-    }
-    return false;
-  };
-
-  if (loc.side == Side::Buy) {
-    return erase_from(bids_);
+  const bool removed = loc.side == Side::Buy ? bids_.cancel_at(id, loc.price)
+                                             : asks_.cancel_at(id, loc.price);
+  if (removed) {
+    locations_.erase(loc_it);
   }
-  return erase_from(asks_);
+  return removed;
 }
 
 std::optional<Level> OrderBook::best_bid() const {
-  if (bids_.empty()) {
+  const auto price = bids_.best_price();
+  if (!price) {
     return std::nullopt;
   }
-  const auto& [price, level] = *bids_.begin();
-  return Level{price, level_qty(level)};
+  return Level{*price, bids_.level_qty_at(*price)};
 }
 
 std::optional<Level> OrderBook::best_ask() const {
-  if (asks_.empty()) {
+  const auto price = asks_.best_price();
+  if (!price) {
     return std::nullopt;
   }
-  const auto& [price, level] = *asks_.begin();
-  return Level{price, level_qty(level)};
+  return Level{*price, asks_.level_qty_at(*price)};
 }
 
 std::optional<Qty> OrderBook::remaining(OrderId id) const {
@@ -219,27 +178,13 @@ std::optional<Qty> OrderBook::remaining(OrderId id) const {
   }
   const Location& loc = loc_it->second;
 
-  const auto* queue = [&]() -> const std::deque<RestingOrder>* {
-    if (loc.side == Side::Buy) {
-      const auto level_it = bids_.find(loc.price);
-      if (level_it == bids_.end()) {
-        return nullptr;
-      }
-      return &level_it->second;
-    }
-    const auto level_it = asks_.find(loc.price);
-    if (level_it == asks_.end()) {
-      return nullptr;
-    }
-    return &level_it->second;
-  }();
-
-  if (queue == nullptr) {
+  const auto& side = loc.side == Side::Buy ? bids_ : asks_;
+  if (!side.level_nonempty(loc.price)) {
     return std::nullopt;
   }
-  for (const auto& o : *queue) {
-    if (o.id == id) {
-      return o.qty;
+  for (const auto& order : side.makers_at(loc.price)) {
+    if (order.id == id) {
+      return order.qty;
     }
   }
   return std::nullopt;
@@ -256,23 +201,23 @@ std::optional<Side> OrderBook::resting_side(OrderId id) const {
 std::uint64_t OrderBook::state_hash() const noexcept {
   std::uint64_t hash = kFnvOffsetBasis;
 
-  for (const auto& [price, level] : bids_) {
+  bids_.for_each_level([&](Price price, const std::vector<detail::DenseBookSide::RestingOrder>& level) {
     hash = fnv1a_i64(hash, price);
     for (const auto& order : level) {
       hash = fnv1a_u64(hash, order.id);
       hash = fnv1a_i64(hash, order.qty);
       hash = fnv1a_u64(hash, order.seq);
     }
-  }
+  });
 
-  for (const auto& [price, level] : asks_) {
+  asks_.for_each_level([&](Price price, const std::vector<detail::DenseBookSide::RestingOrder>& level) {
     hash = fnv1a_i64(hash, price);
     for (const auto& order : level) {
       hash = fnv1a_u64(hash, order.id);
       hash = fnv1a_i64(hash, order.qty);
       hash = fnv1a_u64(hash, order.seq);
     }
-  }
+  });
 
   hash = fnv1a_u64(hash, next_seq_);
   hash = fnv1a_u64(hash, rejects_.duplicate_order_id);
@@ -286,16 +231,17 @@ bool OrderBook::locations_consistent() const {
   std::unordered_map<OrderId, Location> rebuilt;
   rebuilt.reserve(locations_.size());
 
-  auto index_side = [&](const auto& levels, Side side) -> bool {
-    for (const auto& [price, level] : levels) {
+  auto index_side = [&](const detail::DenseBookSide& side, Side book_side) -> bool {
+    bool ok = true;
+    side.for_each_level([&](Price price, const std::vector<detail::DenseBookSide::RestingOrder>& level) {
       for (const auto& order : level) {
-        const Location loc{side, price};
+        const Location loc{book_side, price};
         if (!rebuilt.emplace(order.id, loc).second) {
-          return false;
+          ok = false;
         }
       }
-    }
-    return true;
+    });
+    return ok;
   };
 
   if (!index_side(bids_, Side::Buy)) {
