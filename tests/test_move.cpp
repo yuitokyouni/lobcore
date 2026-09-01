@@ -42,7 +42,7 @@ OrderBook make_deep_book() {
 
 }  // namespace
 
-TEST_CASE("OrderBook copy constructor duplicates pool-backed state") {
+TEST_CASE("OrderBook copy constructor duplicates resting state") {
   OrderBook original;
   submit(original, buy(1, 100, 4));
   submit(original, sell(2, 101, 2));
@@ -101,7 +101,7 @@ TEST_CASE("OrderBook move assignment swaps ownership and leaves source empty") {
   CHECK(populated.best_bid().has_value());
 }
 
-TEST_CASE("OrderBook copy assignment duplicates pool-backed state") {
+TEST_CASE("OrderBook copy assignment duplicates resting state") {
   OrderBook original;
   submit(original, buy(1, 100, 4));
   submit(original, sell(2, 101, 2));
