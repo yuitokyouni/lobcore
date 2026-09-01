@@ -46,6 +46,15 @@ cmake --build build-rel
 | `BM_CrossSingleLevel` | best ask を厚くしたうえで Buy @ 1001, qty=5（1 レベル完結） | 200 |
 | `BM_CrossSweep` | Buy @ 2000, qty=50（複数レベルをスイープ、全量約定） | 20 |
 | `BM_CancelDeepBook` | 深い板の注文 ID を shuffle して cancel | 1,000 |
+| `BM_FlashCrash` | スイープで best を動かし、広い価格帯へ非交差指値を散らす（S3 crash 相当） | 500 |
+
+`BM_FlashCrash` の 1 イテレーション（計測区間）:
+
+- 3 回に 1 回: Buy @ 2000, qty=30（複数 ask レベルをスイープ）
+- それ以外: 交互に Buy @ `500 + (i % 800)` / Sell @ `1500 + (i % 800)`, qty=1（空レベルが増える広帯域の resting）
+
+上記 6 条件それぞれに **`Logged` 接尾辞** の対（`LoggedBook` 経由、ログは `std::vector<LogRecord>` 追記）がある。
+計測区間の注文数・板形状は非 Logged 版と同一。
 
 ### 現状の数字（Release, 3 回 mean, 2026-09 計測）
 
@@ -190,7 +199,7 @@ Stage 4（市場核・`ContinuousMarket`・`AllocationRule`・ログ replay・�
 `lobcore_bench` の壁時計は動かなかった。残ボトルネックは allocator と
 `std::map` / `std::deque` のノード追跡であり、ここを変えない限り実時間は律速し続ける。
 
-本節は **実装着手前の実験計画** である。人間の承認後に初めてコードを変える。
+本節は **実装着手前の実験計画** である。2026-09 に承認済み。
 
 ### 6.1 仮説
 
@@ -234,12 +243,17 @@ Callgrind（CrossSweep 計測区間, eager erase, `main` @ Stage 3 計測時）:
 
 1. `lobcore_bench` に **ログ書き込み付き** のベンチを追加する（既存 5 条件と対になる命名。
    例: `BM_CrossSweepLogged`）。計測区間の注文数・板形状は既存と同一に保つ。
-2. ログは `std::vector<LogRecord>` への追記とする（ファイル I/O は含めない）。
+2. **広帯域の価格変動** を含むベンチ `BM_FlashCrash`（および `BM_FlashCrashLogged`）を追加する。
+   調査文書 §1 結論 2 のとおり、価格レベル配列は価格が動くと空レベルの走査で性能が崩れる
+   （参照: static 6.99 → flash-crash 0.35 M/s）。現行 5 条件は深い板が固定価格帯にあり
+   best がほとんど動かないため、この弱点が見えない。案 A では **ビットマップ等による次レベル探索**
+   が前提になり、本シナリオで劣化がないことを C6 で確認する（§6.6）。
+3. ログは `std::vector<LogRecord>` への追記とする（ファイル I/O は含めない）。
    ディスクは別問題として Stage 5 以降で切り出す。
-3. 参照実装との差分テスト（`test_diff.cpp`）は **引き続き素の `OrderBook`** で走らせる。
+4. 参照実装との差分テスト（`test_diff.cpp`）は **引き続き素の `OrderBook`** で走らせる。
    構造変更後も `OrderBook` の公開 API とセマンティクスは不変。
 
-ログ付きベンチが入るまで、構造変更の採否判断は行わない。
+ログ付きベンチと `BM_FlashCrash` が入るまで、構造変更の採否判断は行わない。
 
 ### 6.4 候補する構造（実装案は 1 つずつ）
 
@@ -247,7 +261,7 @@ Callgrind（CrossSweep 計測区間, eager erase, `main` @ Stage 3 計測時）:
 
 | 案 | 概要 | 主に効かせたいベンチ | リスク |
 |----|------|----------------------|--------|
-| A | 価格レベル配列 + レベル内 FIFO キュー（連続 `Order` スロット、free list） | CrossSweep, CrossSingleLevel | `OrderId` 検索・cancel の O(?) 設計。copy/move のコスト |
+| A | 価格レベル配列 + レベル内 FIFO キュー（連続 `Order` スロット、free list）。**次レベル探索にビットマップ等が前提** | CrossSweep, CrossSingleLevel | 価格が広く動くと空レベル走査で崩れる（調査 §1 結論 2）。`OrderId` 検索・cancel の O(?) 設計。copy/move のコスト |
 | B | SoA（price / qty / seq / side を別配列）+ 価格インデックス | 同上 | 配分規則（ProRata）との接続。可読性低下 |
 | C | best レベルへのキャッシュ（bid/ask 先頭ポインタ）を A/B と併用 | RestOnDeepBook, Cross* | キャッシュ整合のバグ。単独では allocator 問題は残る |
 
@@ -263,7 +277,7 @@ Callgrind（CrossSweep 計測区間, eager erase, `main` @ Stage 3 計測時）:
 ### 6.5 実験手順（1 案あたり）
 
 1. **赤:** 構造変更後も `ctest` 全通過（特に `test_diff`, `test_move`, `test_pro_rata`, `test_repro`）。
-2. **計測（必須）:** Release で `lobcore_bench` を 3 回実行し、5 条件 + ログ付き 5 条件の mean を記録。
+2. **計測（必須）:** Release で `lobcore_bench` を 3 回実行し、5 条件 + ログ付き 5 条件 + `BM_FlashCrash` / `BM_FlashCrashLogged` の mean を記録。
 3. **計測（任意・参考）:** `cross_sweep_profile` + Callgrind Ir / `--simulate-cache=yes`。
    採否には使わないが、Ir が大きく動いて壁時計が動かない場合は §5 と同型の失敗として記録。
 4. **文書化:** 本節のベースライン表を更新し、PR 説明に before/after を貼る。
@@ -276,11 +290,13 @@ Callgrind（CrossSweep 計測区間, eager erase, `main` @ Stage 3 計測時）:
 |---|------|
 | C1 | `ctest`（Debug, ASan/UBSan）全通過 |
 | C2 | `ReferenceBook` 差分テストが新実装でも一致 |
-| C3 | **`lobcore_bench` の壁時計** で、ログ付き `BM_CrossSweep` の mean がベースライン比 **≥ 5% 改善**（同一マシン、3 回 mean） |
-| C4 | ログ付き `BM_CrossSingleLevel` も **横ばい以上**（悪化 ≤ 2%）。C3 だけが良く他が壊れる案は不採用 |
+| C3 | **`lobcore_bench` の壁時計** で、ログ付き `BM_CrossSweepLogged` の mean がベースライン比 **≥ 5% 改善**（同一マシン、3 回 mean） |
+| C4 | ログ付き `BM_CrossSingleLevelLogged` も **横ばい以上**（悪化 ≤ 2%）。C3 だけが良く他が壊れる案は不採用 |
 | C5 | `test_move.cpp`（copy/move/replay 返却）が通過。反実仮想・replay の前提を壊さない |
+| C6 | **`BM_FlashCrashLogged`** も **横ばい以上**（悪化 ≤ 2%）。案 A（価格レベル配列）は空レベル走査で広帯域の価格変動に弱いため、固定深さ板だけの合格は不十分 |
 
-C3 の 5% は初期閾値。改善が 3–4% で再現性が高い場合は人間判断でよいが、
+C3 の **5%** は、Stage 3 の同一マシン再計測で run 間のばらつきがおおむね **1–3%** だったことから、
+ノイズと区別できる最小水準として採用する。改善が 3–4% で再現性が高い場合は人間判断でよいが、
 **1–2% の揺らぎは採用しない**（§4.2 の lazy erase が +1.5% 悪化した先例）。
 
 ### 6.7 却下・revert 基準
@@ -293,7 +309,7 @@ C3 の 5% は初期閾値。改善が 3–4% で再現性が高い場合は人�
 ### 6.8 実装順序（承認後）
 
 ```
-[1] ログ付きベンチ追加（bench のみ、挙動変更なし）
+[1] ログ付きベンチ + BM_FlashCrash（bench のみ、挙動変更なし）
 [2] 案 A 実装 + 計測 + PR
 [3] 案 A 不採用なら revert → 案 B を同手順で
 [4] 採用案を reference 実装のまま残す（削除しない）
