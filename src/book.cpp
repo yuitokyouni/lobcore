@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 
 namespace lobcore {
 
@@ -28,7 +29,74 @@ std::uint64_t fnv1a_i64(std::uint64_t hash, std::int64_t value) {
 
 }  // namespace
 
-Qty OrderBook::level_qty(const std::deque<RestingOrder>& level) {
+void OrderBook::reset_empty_with_fresh_pool() {
+  pool_               = std::make_unique<std::pmr::unsynchronized_pool_resource>();
+  bids_               = BidLevels(pool_.get());
+  asks_               = AskLevels(pool_.get());
+  locations_          = Locations(pool_.get());
+  next_seq_           = 0;
+  last_received_at_   = 0;
+  has_last_received_  = false;
+  rejects_            = {};
+}
+
+OrderBook::OrderBook()
+    : pool_(std::make_unique<std::pmr::unsynchronized_pool_resource>())
+    , bids_(pool_.get())
+    , asks_(pool_.get())
+    , locations_(pool_.get()) {}
+
+OrderBook::OrderBook(const OrderBook& other)
+    : pool_(std::make_unique<std::pmr::unsynchronized_pool_resource>())
+    , bids_(other.bids_, pool_.get())
+    , asks_(other.asks_, pool_.get())
+    , locations_(other.locations_, pool_.get())
+    , next_seq_(other.next_seq_)
+    , last_received_at_(other.last_received_at_)
+    , has_last_received_(other.has_last_received_)
+    , rejects_(other.rejects_) {}
+
+OrderBook::OrderBook(OrderBook&& other) noexcept
+    : pool_(std::move(other.pool_))
+    , bids_(std::move(other.bids_))
+    , asks_(std::move(other.asks_))
+    , locations_(std::move(other.locations_))
+    , next_seq_(other.next_seq_)
+    , last_received_at_(other.last_received_at_)
+    , has_last_received_(other.has_last_received_)
+    , rejects_(other.rejects_) {
+  other.reset_empty_with_fresh_pool();
+}
+
+OrderBook& OrderBook::operator=(const OrderBook& other) {
+  if (this != &other) {
+    OrderBook tmp(other);
+    swap(*this, tmp);
+  }
+  return *this;
+}
+
+OrderBook& OrderBook::operator=(OrderBook&& other) noexcept {
+  if (this != &other) {
+    OrderBook tmp(std::move(other));
+    swap(*this, tmp);
+  }
+  return *this;
+}
+
+void swap(OrderBook& a, OrderBook& b) noexcept {
+  using std::swap;
+  swap(a.pool_, b.pool_);
+  swap(a.bids_, b.bids_);
+  swap(a.asks_, b.asks_);
+  swap(a.locations_, b.locations_);
+  swap(a.next_seq_, b.next_seq_);
+  swap(a.last_received_at_, b.last_received_at_);
+  swap(a.has_last_received_, b.has_last_received_);
+  swap(a.rejects_, b.rejects_);
+}
+
+Qty OrderBook::level_qty(const std::pmr::deque<RestingOrder>& level) {
   Qty total = 0;
   for (const auto& o : level) {
     total += o.qty;
@@ -157,7 +225,7 @@ std::optional<Qty> OrderBook::remaining(OrderId id) const {
   }
   const Location& loc = loc_it->second;
 
-  const auto* queue = [&]() -> const std::deque<RestingOrder>* {
+  const auto* queue = [&]() -> const std::pmr::deque<RestingOrder>* {
     if (loc.side == Side::Buy) {
       const auto level_it = bids_.find(loc.price);
       if (level_it == bids_.end()) {
