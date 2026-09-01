@@ -25,7 +25,7 @@ void Kernel::run() {
     if (next.time > config_.end_time) {
       break;
     }
-    if (config_.max_events > 0 && events_processed_ >= config_.max_events) {
+    if (config_.max_events.has_value() && events_processed_ >= *config_.max_events) {
       break;
     }
 

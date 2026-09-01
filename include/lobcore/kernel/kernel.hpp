@@ -22,6 +22,9 @@ class Kernel {
   [[nodiscard]] Timestamp now() const noexcept { return now_; }
   [[nodiscard]] std::uint64_t events_processed() const noexcept { return events_processed_; }
   [[nodiscard]] bool empty() const noexcept { return heap_.empty(); }
+  [[nodiscard]] const Event* peek_next() const noexcept {
+    return heap_.empty() ? nullptr : &heap_.top();
+  }
   [[nodiscard]] const std::vector<Event>& processed_events() const noexcept {
     return processed_;
   }
