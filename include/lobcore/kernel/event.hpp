@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <variant>
 
+#include <lobcore/kernel/order_message.hpp>
 #include <lobcore/kernel/types.hpp>
 #include <lobcore/types.hpp>
 

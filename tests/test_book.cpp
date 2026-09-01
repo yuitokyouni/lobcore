@@ -213,6 +213,17 @@ TEST_CASE("current behavior (undecided): OrderId may be reused after cancel") {
   CHECK(book.best_bid()->qty == 7);
 }
 
+TEST_CASE("equal consecutive received_at is accepted") {
+  OrderBook book;
+  book.add_limit(buy_at(1, 100, 10, 1), 5);
+
+  auto trades = book.add_limit(buy_at(2, 101, 5, 2), 5);
+  CHECK(trades.empty());
+  CHECK(book.rejects().non_monotonic_timestamp == 0);
+  CHECK(book.remaining(1).value_or(-1) == 10);
+  CHECK(book.remaining(2).value_or(-1) == 5);
+}
+
 TEST_CASE("non-monotonic received_at is rejected") {
   OrderBook book;
   book.add_limit(buy_at(1, 100, 10, 1), 1);

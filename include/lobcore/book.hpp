@@ -33,6 +33,10 @@ struct Trade {
 struct Level {
   Price price;
   Qty   qty;  // そのレベルに載っている残数量の合計
+
+  friend constexpr bool operator==(const Level& a, const Level& b) noexcept {
+    return a.price == b.price && a.qty == b.qty;
+  }
 };
 
 // add_limit が契約違反として拒否した累積件数。
