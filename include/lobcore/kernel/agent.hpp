@@ -1,5 +1,6 @@
 #pragma once
 
+#include <lobcore/kernel/market.hpp>
 #include <lobcore/kernel/rng.hpp>
 #include <lobcore/kernel/types.hpp>
 #include <lobcore/types.hpp>
@@ -13,6 +14,8 @@ class KernelView {
   explicit KernelView(const Kernel& kernel) : kernel_(kernel) {}
 
   [[nodiscard]] Timestamp now() const noexcept;
+  [[nodiscard]] const Market& market(MarketId id) const;
+  [[nodiscard]] std::size_t   market_count() const noexcept;
 
  private:
   const Kernel& kernel_;
@@ -26,6 +29,8 @@ class AgentContext {
   [[nodiscard]] AgentId   id() const noexcept { return id_; }
 
   [[nodiscard]] Rng& rng(ComponentId component);
+
+  void submit(MarketId to, const OrderMessage& msg);
 
   // t > now() のときだけ true。false ならヒープに積まない。
   [[nodiscard]] bool schedule_wakeup(Timestamp t);
