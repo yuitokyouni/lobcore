@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <lobcore/book.hpp>
+#include <lobcore/event_log.hpp>
 
 namespace {
 
@@ -28,6 +29,48 @@ lobcore::OrderBook make_deep_book(lobcore::OrderId& next_id, lobcore::Timestamp&
     }
   }
   return book;
+}
+
+lobcore::LoggedBook make_deep_logged_book(lobcore::OrderId& next_id, lobcore::Timestamp& next_ts) {
+  lobcore::LoggedBook logged;
+  for (int level = 0; level < kDeepLevels; ++level) {
+    const lobcore::Price bid_px = 1000 - level;
+    const lobcore::Price ask_px = 1001 + level;
+    for (int n = 0; n < kOrdersPerLevel; ++n) {
+      const lobcore::Timestamp ts = next_ts++;
+      logged.add_limit(lobcore::Order{next_id++, lobcore::Side::Buy, bid_px, 1, ts}, ts);
+      const lobcore::Timestamp ts2 = next_ts++;
+      logged.add_limit(lobcore::Order{next_id++, lobcore::Side::Sell, ask_px, 1, ts2}, ts2);
+    }
+  }
+  return logged;
+}
+
+void pin_logged(const lobcore::LoggedBook& logged) {
+  benchmark::DoNotOptimize(logged.log().size());
+  if (!logged.log().empty()) {
+    benchmark::DoNotOptimize(logged.log().data());
+  }
+}
+
+// 広帯域の価格変動: スイープで best を動かし、空レベルが増える価格帯へ resting を散らす。
+void run_flash_crash_orders(const auto& add_limit_fn, lobcore::OrderId& next_id,
+                            lobcore::Timestamp& next_ts) {
+  for (int i = 0; i < 500; ++i) {
+    const lobcore::Timestamp ts = next_ts++;
+    if (i % 3 == 0) {
+      auto trades = add_limit_fn(lobcore::Order{next_id++, lobcore::Side::Buy, 2000, 30, ts}, ts);
+      benchmark::DoNotOptimize(trades);
+    } else if (i % 2 == 1) {
+      const lobcore::Price px = 500 + static_cast<lobcore::Price>(i % 800);
+      auto trades = add_limit_fn(lobcore::Order{next_id++, lobcore::Side::Buy, px, 1, ts}, ts);
+      benchmark::DoNotOptimize(trades);
+    } else {
+      const lobcore::Price px = 1500 + static_cast<lobcore::Price>(i % 800);
+      auto trades = add_limit_fn(lobcore::Order{next_id++, lobcore::Side::Sell, px, 1, ts}, ts);
+      benchmark::DoNotOptimize(trades);
+    }
+  }
 }
 
 // 空の板に指値を積む (約定なし)。
@@ -162,6 +205,171 @@ static void BM_CancelDeepBook(benchmark::State& state) {
   state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 1000);
 }
 BENCHMARK(BM_CancelDeepBook);
+
+// 広帯域の価格変動（S3 crash 相当）。深い板固定の 5 条件では見えない弱点を測る。
+static void BM_FlashCrash(benchmark::State& state) {
+  for (auto _ : state) {
+    state.PauseTiming();
+    lobcore::OrderId   next_id = 1;
+    lobcore::Timestamp next_ts = 1;
+    lobcore::OrderBook book    = make_deep_book(next_id, next_ts);
+    state.ResumeTiming();
+
+    run_flash_crash_orders(
+        [&](const lobcore::Order& order, lobcore::Timestamp ts) { return book.add_limit(order, ts); },
+        next_id, next_ts);
+  }
+  state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 500);
+}
+BENCHMARK(BM_FlashCrash);
+
+static void BM_RestOnEmptyLogged(benchmark::State& state) {
+  for (auto _ : state) {
+    state.PauseTiming();
+    lobcore::LoggedBook logged;
+    lobcore::OrderId    next_id = 1;
+    lobcore::Timestamp  next_ts = 1;
+    state.ResumeTiming();
+
+    for (int i = 0; i < 1000; ++i) {
+      const lobcore::Timestamp ts = next_ts++;
+      auto trades =
+          logged.add_limit(lobcore::Order{next_id++, lobcore::Side::Buy, 100, 1, ts}, ts);
+      benchmark::DoNotOptimize(trades);
+      pin_logged(logged);
+    }
+  }
+  state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 1000);
+}
+BENCHMARK(BM_RestOnEmptyLogged);
+
+static void BM_RestOnDeepBookLogged(benchmark::State& state) {
+  for (auto _ : state) {
+    state.PauseTiming();
+    lobcore::OrderId    next_id = 1;
+    lobcore::Timestamp  next_ts = 1;
+    lobcore::LoggedBook logged    = make_deep_logged_book(next_id, next_ts);
+    state.ResumeTiming();
+
+    for (int i = 0; i < 1000; ++i) {
+      const lobcore::Timestamp ts = next_ts++;
+      auto trades =
+          logged.add_limit(lobcore::Order{next_id++, lobcore::Side::Buy, 1000, 1, ts}, ts);
+      benchmark::DoNotOptimize(trades);
+      pin_logged(logged);
+    }
+  }
+  state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 1000);
+}
+BENCHMARK(BM_RestOnDeepBookLogged);
+
+static void BM_CrossSingleLevelLogged(benchmark::State& state) {
+  std::int64_t total_orders = 0;
+  std::int64_t total_fills  = 0;
+
+  for (auto _ : state) {
+    state.PauseTiming();
+    lobcore::OrderId    next_id = 1;
+    lobcore::Timestamp  next_ts = 1;
+    lobcore::LoggedBook logged    = make_deep_logged_book(next_id, next_ts);
+    for (int n = 0; n < 990; ++n) {
+      const lobcore::Timestamp ts = next_ts++;
+      logged.add_limit(lobcore::Order{next_id++, lobcore::Side::Sell, 1001, 1, ts}, ts);
+    }
+    state.ResumeTiming();
+
+    for (int i = 0; i < 200; ++i) {
+      const lobcore::Timestamp ts = next_ts++;
+      auto trades =
+          logged.add_limit(lobcore::Order{next_id++, lobcore::Side::Buy, 1001, 5, ts}, ts);
+      total_fills += static_cast<std::int64_t>(trades.size());
+      ++total_orders;
+      benchmark::DoNotOptimize(trades);
+      pin_logged(logged);
+    }
+  }
+  state.SetItemsProcessed(total_orders);
+  state.counters["avg_fills_per_order"] =
+      total_orders == 0 ? 0.0
+                        : static_cast<double>(total_fills) / static_cast<double>(total_orders);
+}
+BENCHMARK(BM_CrossSingleLevelLogged);
+
+static void BM_CrossSweepLogged(benchmark::State& state) {
+  std::int64_t total_orders = 0;
+  std::int64_t total_fills  = 0;
+
+  for (auto _ : state) {
+    state.PauseTiming();
+    lobcore::OrderId    next_id = 1;
+    lobcore::Timestamp  next_ts = 1;
+    lobcore::LoggedBook logged    = make_deep_logged_book(next_id, next_ts);
+    state.ResumeTiming();
+
+    for (int i = 0; i < 20; ++i) {
+      const lobcore::Timestamp ts = next_ts++;
+      auto trades =
+          logged.add_limit(lobcore::Order{next_id++, lobcore::Side::Buy, 2000, 50, ts}, ts);
+      total_fills += static_cast<std::int64_t>(trades.size());
+      ++total_orders;
+      benchmark::DoNotOptimize(trades);
+      pin_logged(logged);
+    }
+  }
+  state.SetItemsProcessed(total_orders);
+  state.counters["avg_fills_per_order"] =
+      total_orders == 0 ? 0.0
+                        : static_cast<double>(total_fills) / static_cast<double>(total_orders);
+}
+BENCHMARK(BM_CrossSweepLogged);
+
+static void BM_CancelDeepBookLogged(benchmark::State& state) {
+  for (auto _ : state) {
+    state.PauseTiming();
+    lobcore::OrderId    next_id = 1;
+    lobcore::Timestamp  next_ts = 1;
+    lobcore::LoggedBook logged    = make_deep_logged_book(next_id, next_ts);
+
+    std::vector<lobcore::OrderId> ids;
+    ids.reserve(static_cast<std::size_t>(next_id - 1));
+    for (lobcore::OrderId id = 1; id < next_id; ++id) {
+      ids.push_back(id);
+    }
+    std::mt19937_64 rng(42);
+    std::shuffle(ids.begin(), ids.end(), rng);
+    constexpr std::size_t kCancelCount = 1000;
+    state.ResumeTiming();
+
+    for (std::size_t i = 0; i < kCancelCount; ++i) {
+      const lobcore::Timestamp ts = next_ts++;
+      bool ok                     = logged.cancel(ids[i], ts);
+      benchmark::DoNotOptimize(ok);
+      pin_logged(logged);
+    }
+  }
+  state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 1000);
+}
+BENCHMARK(BM_CancelDeepBookLogged);
+
+static void BM_FlashCrashLogged(benchmark::State& state) {
+  for (auto _ : state) {
+    state.PauseTiming();
+    lobcore::OrderId    next_id = 1;
+    lobcore::Timestamp  next_ts = 1;
+    lobcore::LoggedBook logged    = make_deep_logged_book(next_id, next_ts);
+    state.ResumeTiming();
+
+    run_flash_crash_orders(
+        [&](const lobcore::Order& order, lobcore::Timestamp ts) {
+          auto trades = logged.add_limit(order, ts);
+          pin_logged(logged);
+          return trades;
+        },
+        next_id, next_ts);
+  }
+  state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 500);
+}
+BENCHMARK(BM_FlashCrashLogged);
 
 }  // namespace
 
