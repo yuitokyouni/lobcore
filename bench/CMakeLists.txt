@@ -11,3 +11,6 @@ FetchContent_MakeAvailable(benchmark)
 
 add_executable(lobcore_bench bench_book.cpp)
 target_link_libraries(lobcore_bench PRIVATE lobcore benchmark::benchmark)
+
+add_executable(cross_sweep_profile cross_sweep_profile.cpp)
+target_link_libraries(cross_sweep_profile PRIVATE lobcore)
