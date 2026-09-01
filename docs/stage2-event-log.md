@@ -153,8 +153,13 @@ Fill レコードの `seq` にはそれを引き起こした taker の `seq` が
 
 ## 4. リプレイ
 
-ログから Add と Cancel を順に抜き出し、新しい板に流し込む。
-Fill と Reject は結果なので、再実行すれば自然に再現される。
+ログから Add / Reject / Cancel を順に抜き出し、新しい板に流し込む。
+Fill は Add の再実行で自然に再現されるため流さない。
+
+Reject を流す理由: `state_hash()` に `rejects_` が含まれるため、
+拒否も再現しないとハッシュが一致しない。Reject レコードには
+拒否された注文の内容 (side / price / qty / decided_at / received_at) が
+すべて記録されており、そのまま `add_limit` に流し直せば同じ理由で拒否される。
 
 ```cpp
 OrderBook replay(const std::vector<LogRecord>& log);
