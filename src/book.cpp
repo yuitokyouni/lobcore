@@ -183,6 +183,14 @@ std::optional<Qty> OrderBook::remaining(OrderId id) const {
   return std::nullopt;
 }
 
+std::optional<Side> OrderBook::resting_side(OrderId id) const {
+  const auto loc_it = locations_.find(id);
+  if (loc_it == locations_.end()) {
+    return std::nullopt;
+  }
+  return loc_it->second.side;
+}
+
 std::uint64_t OrderBook::state_hash() const noexcept {
   std::uint64_t hash = kFnvOffsetBasis;
 

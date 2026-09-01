@@ -12,6 +12,7 @@ option(LOBCORE_SANITIZE "Enable ASan/UBSan in Debug builds (GCC/Clang only)" ON)
 # ---- library -----------------------------------------------------------------
 add_library(lobcore STATIC
   src/book.cpp
+  src/log.cpp
 )
 target_include_directories(lobcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

@@ -78,6 +78,9 @@ class OrderBook {
   // 板に載っている注文の残数量。載っていなければ nullopt。
   std::optional<Qty> remaining(OrderId id) const;
 
+  // 板に載っている注文の側。載っていなければ nullopt。
+  std::optional<Side> resting_side(OrderId id) const;
+
   RejectCounts rejects() const noexcept { return rejects_; }
 
   std::uint64_t state_hash() const noexcept;
