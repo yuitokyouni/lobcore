@@ -27,56 +27,38 @@ std::vector<Trade> OrderBook::add_limit(const Order& order) {
   std::vector<Trade> trades;
   Qty remaining_qty = order.qty;
 
+  auto match_and_rest = [&](auto& opposite_levels, auto& own_levels, Side own_side,
+                            auto stop_crossing) {
+    while (remaining_qty > 0 && !opposite_levels.empty()) {
+      auto level_it = opposite_levels.begin();
+      if (stop_crossing(level_it->first, order.price)) {
+        break;
+      }
+      auto& queue = level_it->second;
+      auto& maker = queue.front();
+      const Qty fill = std::min(remaining_qty, maker.qty);
+      trades.push_back(Trade{maker.id, order.id, level_it->first, fill});
+      maker.qty -= fill;
+      remaining_qty -= fill;
+      if (maker.qty == 0) {
+        locations_.erase(maker.id);
+        queue.pop_front();
+        if (queue.empty()) {
+          opposite_levels.erase(level_it);
+        }
+      }
+    }
+    if (remaining_qty > 0) {
+      own_levels[order.price].push_back(
+          RestingOrder{order.id, remaining_qty, next_seq_++});
+      locations_[order.id] = Location{own_side, order.price};
+    }
+  };
+
   if (order.side == Side::Buy) {
-    while (remaining_qty > 0 && !asks_.empty()) {
-      auto level_it = asks_.begin();
-      if (level_it->first > order.price) {
-        break;
-      }
-      auto& queue = level_it->second;
-      auto& maker = queue.front();
-      const Qty fill = std::min(remaining_qty, maker.qty);
-      trades.push_back(Trade{maker.id, order.id, level_it->first, fill});
-      maker.qty -= fill;
-      remaining_qty -= fill;
-      if (maker.qty == 0) {
-        locations_.erase(maker.id);
-        queue.pop_front();
-        if (queue.empty()) {
-          asks_.erase(level_it);
-        }
-      }
-    }
-    if (remaining_qty > 0) {
-      bids_[order.price].push_back(
-          RestingOrder{order.id, remaining_qty, next_seq_++});
-      locations_[order.id] = Location{Side::Buy, order.price};
-    }
+    match_and_rest(asks_, bids_, Side::Buy, std::greater<>{});
   } else {
-    while (remaining_qty > 0 && !bids_.empty()) {
-      auto level_it = bids_.begin();
-      if (level_it->first < order.price) {
-        break;
-      }
-      auto& queue = level_it->second;
-      auto& maker = queue.front();
-      const Qty fill = std::min(remaining_qty, maker.qty);
-      trades.push_back(Trade{maker.id, order.id, level_it->first, fill});
-      maker.qty -= fill;
-      remaining_qty -= fill;
-      if (maker.qty == 0) {
-        locations_.erase(maker.id);
-        queue.pop_front();
-        if (queue.empty()) {
-          bids_.erase(level_it);
-        }
-      }
-    }
-    if (remaining_qty > 0) {
-      asks_[order.price].push_back(
-          RestingOrder{order.id, remaining_qty, next_seq_++});
-      locations_[order.id] = Location{Side::Sell, order.price};
-    }
+    match_and_rest(bids_, asks_, Side::Sell, std::less<>{});
   }
 
   return trades;
