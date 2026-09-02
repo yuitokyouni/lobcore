@@ -367,6 +367,52 @@ Stage 5（Python / Config / 実験メタデータのログヘッダ）は本実�
 実装: `include/lobcore/detail/dense_book_side.hpp`, `src/dense_book_side.cpp`。
 `OrderBook` の公開 API は不変。`ReferenceBook`（map+deque）は差分テスト用に維持。
 
+### 6.11 採用前確認（2026-09）
+
+#### 1. 測定条件の一致
+
+| 項目 | ベースライン | 案 A |
+|------|-------------|------|
+| スクリプト | `bench/run_bench_suite.sh` | 同一 |
+| min_time | `0.01s` | 同一 |
+| repetitions | 3 (aggregates_only) | 同一 |
+| CMAKE | `-DCMAKE_BUILD_TYPE=Release -DLOBCORE_BUILD_BENCH=ON` | 同一 |
+| コード | `1a100ac` (map+deque) | 案 A コミット |
+
+再計測: `./bench/verify_struct_exp.sh 0.01s`（worktree で map 基準と現行を同一セッション計測）。
+
+初回計測はベースライン取得後に同一スクリプトで案 A を計測したが、**別ビルド・別セッション** だった。
+verify スクリプトで再確認する。
+
+#### 2. BM_FlashCrash の価格帯と窓
+
+**案 A に固定窓サイズはない。** `DenseBookSide::grow_to_include` が `[min_price_, max_price_]` を動的拡張する（拒否しない）。
+
+| | ティック範囲 |
+|--|-------------|
+| 深い板 (初期) | bid 1..1000, ask 1001..2000 |
+| FlashCrash resting Buy | 500..1299 (800 ティック) |
+| FlashCrash resting Sell | 1500..2299 (800 ティック; **2000 を超える**) |
+| FlashCrash sweep | Buy @ 2000 |
+
+- 初期 ask max=2000 に対し Sell @ 2299 が **窓拡張 (resize)** を発生させる
+- bid min=1 のため **下方向 front-insert は発生しない**（resting Buy 最小 500）
+- 調査 §1 の「固定配列 + 空レベル走査」とは異なり、占有ビットマップで best 探索は O(占有レベル数)
+
+弱点未カバーだったため **`BM_FlashCrashDrift`** を追加: 初期 bid 5000..5100 / ask 5200..5300 から Buy @ 1000..4000 (下方向 insert)、Sell @ 6000..9000 (上方向 resize)、sweep @ 9000。
+
+#### 3. 窓外の挙動と test_diff
+
+| 経路 | 挙動 |
+|------|------|
+| 価格 < min_price_ | `levels_.insert` で front 拡張 (O(新幅)) |
+| 価格 > max_price_ | `levels_.resize` で末尾拡張 |
+| 拒否 | **なし** (map 実装と同じく任意価格を受理) |
+
+旧 `test_diff` (価格 90..110, 空板開始): grow_to_include をほぼ通さない。
+
+追加: **`OrderBook matches ReferenceBook with wide price drift`** — 価格 1..50000、空板、3000 ops × 2 seed。grow_to_include 両方向を通して ReferenceBook と一致することを確認。
+
 ---
 
 ## 7. Stage 3 の区切り

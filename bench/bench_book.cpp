@@ -54,6 +54,11 @@ void pin_logged(const lobcore::LoggedBook& logged) {
 }
 
 // 広帯域の価格変動: スイープで best を動かし、空レベルが増える価格帯へ resting を散らす。
+// 価格帯 (深い板 ask 1001..2000, bid 1..1000 上):
+//   resting Buy:  500 + (i%800) → 500..1299  (800 ティック)
+//   resting Sell: 1500 + (i%800) → 1500..2299 (800 ティック, 初期 ask max 2000 を超える)
+//   sweep Buy @ 2000
+// 案 A (DenseBookSide) は固定窓なし: grow_to_include で min/max を拡張 (拒否しない)。
 void run_flash_crash_orders(const auto& add_limit_fn, lobcore::OrderId& next_id,
                             lobcore::Timestamp& next_ts) {
   for (int i = 0; i < 500; ++i) {
@@ -222,6 +227,49 @@ static void BM_FlashCrash(benchmark::State& state) {
   state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 500);
 }
 BENCHMARK(BM_FlashCrash);
+
+// 狭い初期板 (bid 5000..5100, ask 5200..5300) から価格が窓外へドリフトする。
+// resting Buy @ 1000..4000 → min より下へ (front insert)、Sell @ 6000..9000 → max より上へ。
+static void BM_FlashCrashDrift(benchmark::State& state) {
+  for (auto _ : state) {
+    state.PauseTiming();
+    lobcore::OrderId   next_id = 1;
+    lobcore::Timestamp next_ts = 1;
+    lobcore::OrderBook book;
+    for (int level = 0; level < 100; ++level) {
+      const lobcore::Price bid_px = 5100 - level;
+      const lobcore::Price ask_px = 5200 + level;
+      for (int n = 0; n < 5; ++n) {
+        const lobcore::Timestamp ts = next_ts++;
+        book.add_limit(lobcore::Order{next_id++, lobcore::Side::Buy, bid_px, 1, ts}, ts);
+        const lobcore::Timestamp ts2 = next_ts++;
+        book.add_limit(lobcore::Order{next_id++, lobcore::Side::Sell, ask_px, 1, ts2}, ts2);
+      }
+    }
+    state.ResumeTiming();
+
+    for (int i = 0; i < 500; ++i) {
+      const lobcore::Timestamp ts = next_ts++;
+      if (i % 3 == 0) {
+        auto trades =
+            book.add_limit(lobcore::Order{next_id++, lobcore::Side::Buy, 9000, 20, ts}, ts);
+        benchmark::DoNotOptimize(trades);
+      } else if (i % 2 == 1) {
+        const lobcore::Price px = 1000 + static_cast<lobcore::Price>(i % 3000);
+        auto trades =
+            book.add_limit(lobcore::Order{next_id++, lobcore::Side::Buy, px, 1, ts}, ts);
+        benchmark::DoNotOptimize(trades);
+      } else {
+        const lobcore::Price px = 6000 + static_cast<lobcore::Price>(i % 3000);
+        auto trades =
+            book.add_limit(lobcore::Order{next_id++, lobcore::Side::Sell, px, 1, ts}, ts);
+        benchmark::DoNotOptimize(trades);
+      }
+    }
+  }
+  state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 500);
+}
+BENCHMARK(BM_FlashCrashDrift);
 
 static void BM_RestOnEmptyLogged(benchmark::State& state) {
   for (auto _ : state) {
