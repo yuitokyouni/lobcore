@@ -40,7 +40,7 @@ Experimental     … 測定対象の Impact / Execution agent
 
 ## 2. フェーズ計画
 
-### Phase 0 — 核の不足を埋める ✅ 実装中
+### Phase 0 — 核の不足を埋める ✅ 完了（PR #19）
 
 | 項目 | 内容 | 完了条件 |
 |---|---|---|
@@ -52,7 +52,10 @@ Experimental     … 測定対象の Impact / Execution agent
 **Phase 0 最重要テスト:** 介入時刻 $t_0$ より前は F/B の log が**バイト単位で一致**すること。
 $\epsilon > 0$ の余地はない。ずれれば要件 4 が破れている。
 
-### Phase 1 — 最小構造市場（MVP World）
+### Phase 1 以降 — 実験側（別リポジトリ）
+
+**Phase 1 以降の World エージェント・ImpactExperiment・可視化・PoC 実行は
+lobcore には入れない。** 実験リポジトリで実装する（§4）。
 
 Chiarella–Iori の簡略版（効用最大化は Phase 5 へ）。
 
@@ -85,14 +88,25 @@ $\Delta(t) = m_F(t) - m_B(t)$。Implementation shortfall 等。
 
 ---
 
-## 3. 最初の PoC（Phase 3 以降）
+## 3. 最初の PoC（Phase 3 以降・実験側）
 
-**成功基準（修正）:** $t < t_0$ では F/B の log がバイト単位で一致（`log_before_time` + `logs_byte_equal`）。
+**成功基準:** $t < t_0$ では F/B の log がバイト単位で一致（`log_before_time` + `logs_byte_equal`）。
 $t \ge t_0$ では $\Delta(t) = m_F(t) - m_B(t)$ が Experimental 実行窓で非ゼロ。
 
 ---
 
-## 4. 実装 API（Phase 0）
+## 4. 実装の分担
+
+### 4.1 lobcore 側（完了）
+
+反実仮想実験を **支援するインフラ**。モデル実装は置かない。
+
+| 部品 | 役割 |
+|---|---|
+| `Kernel::suppress_agent` | 注文抑制フィルタ（Baseline = 注文が存在しなかった世界） |
+| `Kernel::sentinel_rng` | exogenous 系列（$f_t$ 等）用ストリーム |
+| `Experiment.run_pair` / `run(suppress=...)` | F/B ペア実行 |
+| `lobcore.analysis` | `mid_series`・`logs_byte_equal`・`filter_log_exclude_*` 等のログ操作 |
 
 ```cpp
 kernel.suppress_agent(agent_id);  // submit を捨てる。on_wakeup / rng は通常
@@ -101,10 +115,45 @@ kernel.sentinel_rng(component);   // exogenous f_t 用
 
 ```python
 pair = Experiment(...).run_pair(suppress_agent_ids=[impact_agent_id])
-# pair.factual, pair.baseline
-
 from lobcore import log_before_time, filter_log_exclude_order_ids, mid_series
 ```
+
+足りない機能が見つかったら lobcore に PR を出す。
+
+### 4.2 実験側 — `financial-abm-lab` / `experiments/YH012`
+
+**新規リポジトリは作らない。** 既存の研究モノレポ
+[`financial-abm-lab`](https://github.com/yuitokyouni/financial-abm-lab) の研究ライン
+**YH012** に置く（YH007–010 と同じ規約: `experiments/YH0xx/` に spec・スクリプト・レポートを同居）。
+
+```
+financial-abm-lab/
+  experiments/YH012/          # 単一注文インパクト反実仮想（lobcore 利用）
+    README.md
+    specs/                    # プレレジ・HANDOFF
+    agents.py                 # Fundamentalist, Chartist, NoiseTrader
+    experiment.py             # ImpactExperiment（run_pair を使う側）
+    plot.py
+    configs/
+      poc_seed42.yaml
+    tests/                    # モデル実装のテスト。lobcore CI には入らない
+  packages/                   # （必要なら再利用コアを昇格。初版は YH012 内で足りる）
+```
+
+依存: `pyproject.toml` から lobcore をローカル参照（例:
+`lobcore @ file:///.../lobcore/python`）または editable install。
+
+**Phase 1 以降はすべて YH012 側:**
+
+- Fundamentalist / Chartist / NoiseTrader
+- ImpactExperiment・可視化・PoC 実行
+- モデル実装のテスト
+
+lobcore にはモデル実装を入れない。本文書（`docs/stage6-impact-experiment.md`）は
+「lobcore が反実仮想実験をどう支援するか」の設計として lobcore 側に残す。
+
+YH012 の scaffold は lobcore 側の整理（本節）が済んでから、
+`financial-abm-lab` 側に別途投げる。
 
 ---
 
