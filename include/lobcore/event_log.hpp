@@ -47,6 +47,10 @@ struct LogRecord {
 
 using LogEmitFn = std::function<void(const LogRecord&)>;
 
+// NumPy LOG_DTYPE(align=True) と一致させる。bindings と pytest で固定。
+static_assert(sizeof(LogRecord) == 96);
+static_assert(alignof(LogRecord) == 8);
+
 // OrderBook への操作と LogRecord 生成を共通化する。LoggedBook と ContinuousMarket が使う。
 class BookEventLogWriter {
  public:
