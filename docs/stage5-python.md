@@ -34,8 +34,11 @@ python/
   tests/
     test_binding.py        # pytest
 bindings/
+  CMakeLists.txt           # pybind11 モジュール
   module.cpp               # pybind11 モジュール定義
-  batch_agent.hpp/cpp      # BatchPythonAgent(C++ 側の一括受け口)
+include/lobcore/kernel/
+  batch.hpp                # BatchObservation / BatchAction
+  batch_member_agent.hpp   # 核に登録する空の Agent プレースホルダ
 ```
 
 C++ のビルドは既存の CMake に `LOBCORE_BUILD_PYTHON` オプションを足す形。
@@ -45,26 +48,23 @@ C++ のビルドは既存の CMake に `LOBCORE_BUILD_PYTHON` オプションを
 
 ## 2. C++ 側: 一括受け口
 
-### 2.1 BatchPythonAgent
+### 2.1 BatchMemberAgent と add_batch_agents
 
-核から見ると 1 つの `Agent` だが、内部で複数の Python エージェントを束ねる。
+Python エージェント群は、核から見ると複数の `BatchMemberAgent`(空の `Agent`) として
+登録される。同一時刻の起床は核が集め、`BatchStepFn` を 1 回呼ぶ。
 
 ```cpp
-class BatchPythonAgent : public Agent {
- public:
-  BatchPythonAgent(pybind11::object step_fn, std::vector<AgentId> members);
-
-  void on_wakeup(const KernelView& view, AgentContext& ctx) override;
-  void on_notification(const NotificationPayload& n,
-                       const KernelView& view, AgentContext& ctx) override;
- private:
-  pybind11::object step_fn_;
-  std::vector<AgentId> members_;
+// include/lobcore/kernel/batch_member_agent.hpp
+class BatchMemberAgent final : public Agent {
+  void on_wakeup(...) override {}   // 実処理は BatchStepFn 側
+  void on_notification(...) override {}
 };
+
+// Kernel::add_batch_agents(BatchStepFn step, std::size_t n)
+// → BatchMemberAgent を n 体追加し、同一時刻の起床を step に渡す
 ```
 
-問題: 核は `AgentWakeup` を 1 体ずつディスパッチする。一括で渡すには、
-**同一時刻の起床を核が集めてから Python を 1 回呼ぶ**必要がある。
+pybind11 側では Python の `step_fn` を `BatchStepFn` にラップして登録する。
 
 ### 2.2 核の変更: 同一時刻の起床をまとめる
 
@@ -73,7 +73,7 @@ class BatchPythonAgent : public Agent {
 ```
 現在: AgentWakeup を 1 つ pop → agent.on_wakeup() → 次へ
 変更: 同一 time の AgentWakeup を連続して pop し、agent_id を集める
-      → BatchPythonAgent に属するものは 1 回の呼び出しにまとめる
+      → batch_member な Agent は 1 回の BatchStepFn 呼び出しにまとめる
       → C++ ネイティブの Agent は従来通り 1 体ずつ
 ```
 
@@ -98,8 +98,9 @@ struct MarketSnapshot {
 };
 ```
 
-自分の注文状態(`remaining`)は含めない。必要なら Python 側が
-`market.remaining(order_id)` を個別に呼ぶ。頻度は低いはず。
+自分の注文状態(`remaining`)は `BatchObservation` に含めない。
+`Experiment` / `BatchAdapter.bind_kernel()` 経路では `View.market(id).remaining(order_id)` が
+`Kernel::market_remaining` に配線される。kernel 未配線の `View` では `NotImplementedError`。
 
 ### 2.4 Python から受け取るもの
 
@@ -129,9 +130,8 @@ struct BatchAction {
 Python 側が `np.random` を使うと要件 4 が壊れる。C++ の `Rng` を Python に出す。
 
 ```cpp
-// バインディング
-class PyRng {
- public:
+// bindings/module.cpp — Rng をそのまま公開
+class Rng {
   std::uint64_t next_u64();
   double uniform();                     // [0, 1)
   double normal(double mu, double sigma);
@@ -139,8 +139,11 @@ class PyRng {
   pybind11::array_t<double> uniform_array(std::size_t n);   // 一括
 };
 
-PyRng rng_for(AgentId agent, ComponentId component);   // 導出規則は Stage 4 §6
+Kernel.rng_for(AgentId agent, ComponentId component);   // 導出規則は Stage 4 §6
 ```
+
+Python エージェントは `Context.rng(component)` 経由で使う(内部で `rng_for` を呼ぶ)。
+エージェント作者が `agent_id` を意識する必要はない。
 
 `normal` と `exponential` は C++ 側で `std::normal_distribution` 等を使う。
 ただし分布の実装は標準ライブラリ依存で環境をまたいだ再現が保証されないため、
@@ -190,17 +193,16 @@ C++ の一括呼び出しを受けて、各 `Agent` インスタンスの `on_wa
 
 ```python
 class BatchAdapter:
-    def __init__(self, agents: list[Agent]):
-        self._agents = agents
+    def __init__(self, agents: list[Agent], *, strict: bool = False): ...
+    def bind_kernel(self, kernel: Kernel) -> None: ...   # Experiment が run 前に呼ぶ
 
     def step(self, obs: BatchObservation) -> BatchAction:
-        view = View.from_observation(obs)        # スナップショットを 1 回作る
+        view = View.from_observation(obs, remaining_fns=...)  # kernel 配線時
         orders, wakeups = [], []
         for aid in obs.agent_ids:
-            ctx = Context(agent_id=aid, now=obs.now)
+            ctx = Context(agent_id=aid, now=obs.now, kernel=self._kernel)
             self._agents[aid].on_wakeup(view, ctx)
-            orders.extend(ctx.orders)
-            wakeups.append(ctx.next_wakeup or 0)
+            ...
         return BatchAction(orders, wakeups)
 ```
 
@@ -216,7 +218,7 @@ class BatchAdapter:
 def my_step(obs: BatchObservation) -> BatchAction:
     ...   # NumPy でベクトル化
 
-kernel.add_python_agents(my_step, n_agents=1000)
+kernel.add_batch_agents(my_step, n=1000)
 ```
 
 ---
@@ -242,8 +244,9 @@ LOG_DTYPE = np.dtype([
 一致することを C++ 側の `static_assert(sizeof(LogRecord) == ...)` と
 Python 側のテストの両方で固定する。
 
-取り出しは `kernel.log()` が `np.ndarray` を返す。コピーで良い。
-ゼロコピーは実験が終わってから取り出すので不要。
+取り出しは `kernel.log_bytes()` が生バイト列を返し、Python 側で
+`np.frombuffer(..., dtype=LOG_DTYPE)` する。`Experiment.run()` はこれをラップして
+`result.log` を返す。コピーで良い。
 
 ### 4.2 メタデータ
 
@@ -268,7 +271,8 @@ class ExperimentMeta:
 [8 bytes: header_len][header_len bytes: JSON][records...]
 ```
 
-メモリ上では `kernel.meta()` と `kernel.log()` を別々に返す。
+メモリ上では `Experiment.run()` が `ExperimentResult(log=..., meta=..., state_hash=...)` を返す。
+ファイル書き出しは `write_log_file` / `read_log_file`。
 
 ---
 
@@ -279,7 +283,8 @@ class ExperimentMeta:
 ```python
 exp = Experiment(
     seed=42,
-    markets=[ContinuousMarket(rule="pro_rata")],
+    rule="pro_rata",          # "price_time" | "pro_rata"
+    n_markets=1,
     agents=[NoiseTrader() for _ in range(100)] + [MarketMaker()],
     end_time=1_000_000,
 )
@@ -316,7 +321,8 @@ C++ 側の検査(§2.5)と重複するが、Python 側でも早期に捕まえ�
 - Python `Agent` を 1 体登録して実行、注文が板に届く
 - 同一時刻に複数の Python エージェントが起き、全員同じ `View` を見る
 - `schedule_wakeup(now)` が拒否される
-- `rng(component)` が同じシードで同じ列を返す
+- `rng(component)` / `Context.rng(component)` が同じシードで同じ列を返す(normal / exponential 含む)
+- `write_log_file` / `read_log_file` のラウンドトリップ
 - **同じ `Experiment` を 2 回実行して `log` と `state_hash` が一致する**(到達点)
 - 規則を `pro_rata` に変えると `log` が変わる
 - `BatchAdapter` 経由と `step` 直接渡しで同じ結果になる
@@ -324,7 +330,7 @@ C++ 側の検査(§2.5)と重複するが、Python 側でも早期に捕まえ�
 C++ 側 `tests/test_batch.cpp`:
 
 - `Kernel` が同一時刻の `AgentWakeup` を正しく集める
-- `BatchPythonAgent` 無しでも既存 69 本が通る(核の変更が既存に影響しない)
+- batch 無しでも既存 70 本が通る(核の変更が既存に影響しない)
 
 ---
 

@@ -54,6 +54,7 @@ class Experiment:
 
         market_ids = [kernel.add_market(self.rule) for _ in range(self.n_markets)]
 
+        adapter: BatchAdapter | None = None
         if self._step_fn is not None:
             step = self._step_fn
             n_agents = int(self.agent_config.get("n_agents", len(self._agents)))
@@ -66,6 +67,8 @@ class Experiment:
             raise ValueError("Experiment requires at least one agent")
 
         ids = kernel.add_batch_agents(step, n_agents)
+        if adapter is not None:
+            adapter.bind_kernel(kernel)
         for aid in ids:
             kernel.schedule_wakeup(1, aid)
 

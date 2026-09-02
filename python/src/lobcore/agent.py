@@ -8,7 +8,9 @@ from lobcore._core import (
     BatchAction,
     BatchObservation,
     CancelOrder,
+    Kernel,
     OrderSubmission,
+    Rng,
     Side,
 )
 
@@ -27,7 +29,9 @@ class MarketView:
 
     def remaining(self, order_id: int) -> int | None:
         if self._remaining_fn is None:
-            return None
+            raise NotImplementedError(
+                "View.remaining requires kernel binding (Experiment or BatchAdapter.bind_kernel)"
+            )
         return self._remaining_fn(order_id)
 
 
@@ -53,16 +57,31 @@ class View:
 
 
 class Context:
-    def __init__(self, agent_id: int, now: int, order_id_base: int | None = None) -> None:
+    def __init__(
+        self,
+        agent_id: int,
+        now: int,
+        *,
+        kernel: Kernel | None = None,
+        order_id_base: int | None = None,
+    ) -> None:
         self.agent_id = int(agent_id)
         self.now = int(now)
         self.orders: list[OrderSubmission] = []
         self.next_wakeup: int | None = None
         self._seq = 0
+        self._kernel = kernel
         # エージェント ID 上位 32bit + 連番で衝突を避ける
         self._order_id_base = (
             order_id_base if order_id_base is not None else (self.agent_id << 32)
         )
+
+    def rng(self, component: int) -> Rng:
+        if self._kernel is None:
+            raise NotImplementedError(
+                "Context.rng requires kernel binding (Experiment or BatchAdapter.bind_kernel)"
+            )
+        return self._kernel.rng_for(self.agent_id, int(component))
 
     def submit(
         self,
@@ -118,9 +137,21 @@ class BatchAdapter:
         self._agents = agents
         self._strict = strict
         self._stopped: set[int] = set()
+        self._kernel: Kernel | None = None
+
+    def bind_kernel(self, kernel: Kernel) -> None:
+        self._kernel = kernel
+
+    def _remaining_fns(self) -> list[Any] | None:
+        if self._kernel is None:
+            return None
+        fns: list[Any] = []
+        for mid in range(self._kernel.market_count()):
+            fns.append(lambda oid, market_id=mid: self._kernel.market_remaining(market_id, oid))
+        return fns
 
     def step(self, obs: BatchObservation) -> BatchAction:
-        view = View.from_observation(obs)
+        view = View.from_observation(obs, remaining_fns=self._remaining_fns())
         orders: list[OrderSubmission] = []
         wakeups: list[int] = []
         for aid in obs.agent_ids:
@@ -128,7 +159,7 @@ class BatchAdapter:
             if aid_i in self._stopped or aid_i >= len(self._agents):
                 wakeups.append(0)
                 continue
-            ctx = Context(agent_id=aid_i, now=int(obs.now))
+            ctx = Context(agent_id=aid_i, now=int(obs.now), kernel=self._kernel)
             try:
                 self._agents[aid_i].on_wakeup(view, ctx)
             except Exception:
