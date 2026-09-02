@@ -226,6 +226,132 @@ ScenarioResult run_overlap_scenario(const std::uint64_t              master_seed
   return ScenarioResult{kernel.emitted_log(), market.state_hash()};
 }
 
+struct CounterfactualScenarioResult {
+  std::vector<std::uint64_t> rng0;
+  std::vector<std::uint64_t> rng1;
+  std::vector<std::uint64_t> rng2;
+  std::vector<LogRecord>     log;
+};
+
+class SteppingRngAgent final : public Agent {
+ public:
+  SteppingRngAgent(MarketId market, std::vector<std::uint64_t>* rng_out, Timestamp stop_at,
+                   OrderId order_id, Side side, Price price, Qty qty, Timestamp submit_at)
+      : market_(market),
+        rng_out_(rng_out),
+        stop_at_(stop_at),
+        order_id_(order_id),
+        side_(side),
+        price_(price),
+        qty_(qty),
+        submit_at_(submit_at) {}
+
+  void on_wakeup(const KernelView& /*view*/, AgentContext& ctx) override {
+    rng_out_->push_back(ctx.rng(0).next_u64());
+    if (!submitted_ && submit_at_ >= 0 && ctx.now() == submit_at_) {
+      submitted_ = true;
+      if (side_ == Side::Buy) {
+        ctx.submit(market_, buy_msg(order_id_, price_, qty_));
+      } else {
+        ctx.submit(market_, sell_msg(order_id_, price_, qty_));
+      }
+    }
+    if (ctx.now() < stop_at_) {
+      CHECK(ctx.schedule_wakeup(ctx.now() + 1));
+    }
+  }
+
+  void on_notification(const NotificationPayload& /*notification*/,
+                       const KernelView& /*view*/,
+                       AgentContext& /*ctx*/) override {}
+
+ private:
+  MarketId                   market_;
+  std::vector<std::uint64_t>* rng_out_;
+  Timestamp                  stop_at_;
+  OrderId                    order_id_;
+  Side                       side_;
+  Price                      price_;
+  Qty                        qty_;
+  Timestamp                  submit_at_;
+  bool                       submitted_ = false;
+};
+
+CounterfactualScenarioResult run_counterfactual_scenario(const bool suppress_middle) {
+  KernelConfig config;
+  config.master_seed = 4242;
+  config.end_time    = 10;
+  Kernel kernel(config);
+
+  if (suppress_middle) {
+    kernel.suppress_agent(1);
+  }
+
+  const MarketId market_id = kernel.add_market(std::make_unique<ContinuousMarket>());
+
+  CounterfactualScenarioResult result;
+
+  kernel.add_agent(std::make_unique<SteppingRngAgent>(
+      market_id, &result.rng0, 10, 1000, Side::Sell, 100, 5, 2));
+  kernel.add_agent(std::make_unique<SteppingRngAgent>(
+      market_id, &result.rng1, 10, 2000, Side::Buy, 50, 3, 5));
+  kernel.add_agent(
+      std::make_unique<SteppingRngAgent>(market_id, &result.rng2, 10, 3000, Side::Buy, 50, 1, -1));
+
+  kernel.schedule(0, AgentWakeup{0});
+  kernel.schedule(0, AgentWakeup{1});
+  kernel.schedule(0, AgentWakeup{2});
+  kernel.run();
+
+  result.log = kernel.emitted_log();
+  return result;
+}
+
+bool log_record_from_order(const LogRecord& rec, const OrderId order_id) {
+  if (rec.order_id == order_id || rec.maker_id == order_id) {
+    return true;
+  }
+  return false;
+}
+
+std::vector<LogRecord> log_without_order(const std::vector<LogRecord>& log, const OrderId order_id) {
+  std::vector<LogRecord> out;
+  out.reserve(log.size());
+  for (const LogRecord& rec : log) {
+    if (!log_record_from_order(rec, order_id)) {
+      out.push_back(rec);
+    }
+  }
+  return out;
+}
+
+std::vector<LogRecord> log_before_time(const std::vector<LogRecord>& log, const Timestamp before) {
+  std::vector<LogRecord> out;
+  out.reserve(log.size());
+  for (const LogRecord& rec : log) {
+    if (rec.received_at < before) {
+      out.push_back(rec);
+    }
+  }
+  return out;
+}
+
+TEST_CASE("suppress_agent preserves all agents' rng streams") {
+  const auto factual  = run_counterfactual_scenario(false);
+  const auto baseline = run_counterfactual_scenario(true);
+
+  CHECK(factual.rng0 == baseline.rng0);
+  CHECK(factual.rng1 == baseline.rng1);
+  CHECK(factual.rng2 == baseline.rng2);
+
+  const auto factual_prefix  = log_before_time(factual.log, 5);
+  const auto baseline_prefix = log_before_time(baseline.log, 5);
+  CHECK(factual_prefix == baseline_prefix);
+
+  const auto factual_filtered = log_without_order(factual.log, 2000);
+  CHECK(factual_filtered == baseline.log);
+}
+
 }  // namespace
 
 TEST_CASE("same seed reproduces identical log and market state") {

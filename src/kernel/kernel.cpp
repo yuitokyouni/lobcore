@@ -130,7 +130,55 @@ bool Kernel::schedule_agent_wakeup(AgentId agent, Timestamp time) {
   return true;
 }
 
+void Kernel::suppress_agent(AgentId id) {
+  if (finished_) {
+    throw std::logic_error("cannot suppress agents after Kernel::run");
+  }
+  suppressed_agents_.insert(id);
+}
+
+bool Kernel::is_agent_suppressed(AgentId id) const noexcept {
+  return suppressed_agents_.find(id) != suppressed_agents_.end();
+}
+
+Rng& Kernel::sentinel_rng(ComponentId component) {
+  const auto it = sentinel_rng_.find(component);
+  if (it != sentinel_rng_.end()) {
+    return it->second;
+  }
+  const StreamKey key{.agent_id = kSentinelAgentId, .component_id = component};
+  auto [inserted, ok] = sentinel_rng_.emplace(component, make_rng(config_.master_seed, key));
+  assert(ok);
+  return inserted->second;
+}
+
+namespace {
+
+std::uint64_t stream_map_key(AgentId agent, ComponentId component) {
+  return (static_cast<std::uint64_t>(agent) << 32) | static_cast<std::uint64_t>(component);
+}
+
+}  // namespace
+
+Rng& Kernel::rng_for(AgentId id, ComponentId component) {
+  if (id < agents_.size()) {
+    return agent_rng(id, component);
+  }
+  const std::uint64_t key = stream_map_key(id, component);
+  const auto          it  = detached_rng_.find(key);
+  if (it != detached_rng_.end()) {
+    return it->second;
+  }
+  const StreamKey stream_key{.agent_id = id, .component_id = component};
+  auto [inserted, ok] = detached_rng_.emplace(key, make_rng(config_.master_seed, stream_key));
+  assert(ok);
+  return inserted->second;
+}
+
 void Kernel::submit_order(AgentId from, MarketId to, OrderMessage msg) {
+  if (suppressed_agents_.find(from) != suppressed_agents_.end()) {
+    return;
+  }
   if (to >= markets_.size()) {
     return;
   }

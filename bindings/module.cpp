@@ -196,8 +196,10 @@ PYBIND11_MODULE(_core, m) {
              return k.market(mid).remaining(oid);
            })
       .def("log_bytes", [](const lobcore::Kernel& k) { return log_to_bytes(k.emitted_log()); })
+      .def("suppress_agent", &lobcore::Kernel::suppress_agent)
+      .def("is_agent_suppressed", &lobcore::Kernel::is_agent_suppressed)
+      .def("sentinel_rng", &lobcore::Kernel::sentinel_rng)
       .def("rng_for", [](lobcore::Kernel& k, lobcore::AgentId agent, lobcore::ComponentId comp) {
-        return lobcore::make_rng(k.master_seed(),
-                                 lobcore::StreamKey{.agent_id = agent, .component_id = comp});
+        return k.rng_for(agent, comp);
       });
 }

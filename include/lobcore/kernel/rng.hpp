@@ -2,10 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace lobcore {
 
 using ComponentId = std::uint32_t;
+
+// エージェントに属さない exogenous 系列（fundamental 等）用。要件 4。
+inline constexpr std::uint64_t kSentinelAgentId = std::numeric_limits<std::uint64_t>::max();
 
 struct StreamKey {
   std::uint64_t agent_id;
