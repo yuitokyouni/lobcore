@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 
@@ -15,6 +15,13 @@ class ExperimentResult:
     log: np.ndarray
     meta: ExperimentMeta
     state_hash: int
+
+
+@dataclass
+class ExperimentPairResult:
+    factual: ExperimentResult
+    baseline: ExperimentResult
+    suppress_agent_ids: tuple[int, ...]
 
 
 def _kernel_log(kernel: Kernel) -> np.ndarray:
@@ -46,7 +53,20 @@ class Experiment:
         self._agents = agents or []
         self._step_fn = step_fn
 
-    def run(self) -> ExperimentResult:
+    def run(self, *, suppress_agent_ids: Iterable[int] = ()) -> ExperimentResult:
+        return self._run_once(suppress=tuple(int(x) for x in suppress_agent_ids))
+
+    def run_pair(self, suppress_agent_ids: Iterable[int]) -> ExperimentPairResult:
+        suppress = tuple(int(x) for x in suppress_agent_ids)
+        factual = self._run_once(suppress=())
+        baseline = self._run_once(suppress=suppress)
+        return ExperimentPairResult(
+            factual=factual,
+            baseline=baseline,
+            suppress_agent_ids=suppress,
+        )
+
+    def _run_once(self, suppress: tuple[int, ...]) -> ExperimentResult:
         cfg = KernelConfig()
         cfg.end_time = self.end_time
         cfg.master_seed = self.seed
@@ -69,6 +89,8 @@ class Experiment:
         ids = kernel.add_batch_agents(step, n_agents)
         if adapter is not None:
             adapter.bind_kernel(kernel)
+        for aid in suppress:
+            kernel.suppress_agent(int(aid))
         for aid in ids:
             kernel.schedule_wakeup(1, aid)
 
@@ -80,7 +102,7 @@ class Experiment:
             n_agents=n_agents,
             n_markets=len(market_ids),
             end_time=self.end_time,
-            agent_config=self.agent_config,
+            agent_config={**self.agent_config, "suppress_agent_ids": list(suppress)},
         )
         state_hash = 0
         for mid in market_ids:

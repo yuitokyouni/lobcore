@@ -54,6 +54,14 @@ class Kernel {
   [[nodiscard]] const Market& market(MarketId id) const;
   [[nodiscard]] std::uint64_t market_state_hash(MarketId id) const;
 
+  // Stage 6: 反実仮想。指定 agent の submit を捨てる（on_wakeup / rng は通常通り）。
+  void suppress_agent(AgentId id);
+  [[nodiscard]] bool is_agent_suppressed(AgentId id) const noexcept;
+
+  // exogenous 系列（fundamental 等）。kSentinelAgentId から導出。
+  [[nodiscard]] Rng& sentinel_rng(ComponentId component);
+  [[nodiscard]] Rng& rng_for(AgentId id, ComponentId component);
+
  private:
   friend class AgentContext;
   friend class KernelView;
@@ -94,6 +102,9 @@ class Kernel {
   BatchStepFn                              batch_step_;
   std::unordered_set<AgentId>              batch_members_;
   BatchRejectCounts                        batch_rejects_{};
+  std::unordered_set<AgentId>              suppressed_agents_;
+  std::unordered_map<ComponentId, Rng>     sentinel_rng_;
+  std::unordered_map<std::uint64_t, Rng>   detached_rng_;
 };
 
 }  // namespace lobcore

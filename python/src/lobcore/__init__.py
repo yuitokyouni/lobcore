@@ -20,8 +20,20 @@ from lobcore._core import (  # noqa: F401
     Trade,
 )
 from lobcore.agent import Agent, BatchAdapter, Context, MarketView, View
-from lobcore.experiment import Experiment, ExperimentResult
+from lobcore.experiment import Experiment, ExperimentPairResult, ExperimentResult
 from lobcore.log import LOG_DTYPE, ExperimentMeta, read_log_file, write_log_file
+from lobcore.analysis import (
+    filter_log_exclude_agent,
+    filter_log_exclude_order_ids,
+    impact_delta,
+    log_before_time,
+    logs_byte_equal,
+    mid_from_record,
+    mid_series,
+    order_id_belongs_to_agent,
+    order_id_range,
+    record_from_agent,
+)
 
 __all__ = [
     "LOG_DTYPE",
@@ -37,6 +49,7 @@ __all__ = [
     "Context",
     "Experiment",
     "ExperimentMeta",
+    "ExperimentPairResult",
     "ExperimentResult",
     "Kernel",
     "KernelConfig",
@@ -50,6 +63,16 @@ __all__ = [
     "Side",
     "Trade",
     "View",
+    "filter_log_exclude_agent",
+    "filter_log_exclude_order_ids",
+    "impact_delta",
+    "log_before_time",
+    "logs_byte_equal",
+    "mid_from_record",
+    "mid_series",
+    "order_id_belongs_to_agent",
+    "order_id_range",
     "read_log_file",
+    "record_from_agent",
     "write_log_file",
 ]
