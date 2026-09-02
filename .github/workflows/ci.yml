@@ -38,3 +38,18 @@ jobs:
         run: cmake --build build-rel
       - name: Bench smoke run
         run: ./build-rel/bench/lobcore_bench --benchmark_min_time=0.01s
+
+  python:
+    name: python bindings (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: pip install -e "./python[test]"
+      - name: Pytest
+        run: pytest -q
+        working-directory: python

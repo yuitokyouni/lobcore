@@ -1,0 +1,23 @@
+[build-system]
+requires = ["scikit-build-core>=0.9", "pybind11>=2.12", "numpy>=1.24"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "lobcore"
+version = "0.1.0"
+description = "Limit order book matching engine and discrete-event market simulator"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.scikit-build]
+cmake.source-dir = ".."
+cmake.args = ["-DLOBCORE_BUILD_PYTHON=ON", "-DLOBCORE_BUILD_TESTS=OFF", "-DLOBCORE_BUILD_BENCH=OFF", "-DLOBCORE_SANITIZE=OFF"]
+wheel.packages = ["src/lobcore"]
+build-dir = "build/{wheel_tag}"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

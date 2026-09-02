@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(LOBCORE_BUILD_TESTS "Build unit tests (Catch2)" ON)
 option(LOBCORE_BUILD_BENCH "Build benchmarks (Google Benchmark)" OFF)
+option(LOBCORE_BUILD_PYTHON "Build Python module (pybind11)" OFF)
 option(LOBCORE_SANITIZE "Enable ASan/UBSan in Debug builds (GCC/Clang only)" ON)
 
 # ---- library -----------------------------------------------------------------
@@ -22,6 +23,7 @@ add_library(lobcore STATIC
   src/allocation.cpp
 )
 target_include_directories(lobcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set_target_properties(lobcore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(MSVC)
   target_compile_options(lobcore PUBLIC /W4 /permissive-)
@@ -46,4 +48,8 @@ endif()
 
 if(LOBCORE_BUILD_BENCH)
   add_subdirectory(bench)
+endif()
+
+if(LOBCORE_BUILD_PYTHON)
+  add_subdirectory(bindings)
 endif()
