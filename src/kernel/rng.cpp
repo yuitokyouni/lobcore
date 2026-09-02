@@ -1,5 +1,8 @@
 #include <lobcore/kernel/rng.hpp>
 
+#include <cmath>
+#include <limits>
+
 namespace lobcore {
 
 namespace {
@@ -37,13 +40,43 @@ std::uint64_t Rng::next_u64() {
   return result;
 }
 
+double Rng::uniform() {
+  return static_cast<double>(next_u64() >> 11) * 0x1.0p-53;
+}
+
+double Rng::normal(double mu, double sigma) {
+  if (has_spare_normal_) {
+    has_spare_normal_ = false;
+    return mu + sigma * spare_normal_;
+  }
+  double u1 = 0.0;
+  double u2 = 0.0;
+  do {
+    u1 = uniform();
+  } while (u1 <= std::numeric_limits<double>::min());
+  u2                 = uniform();
+  const double r     = std::sqrt(-2.0 * std::log(u1));
+  const double theta = 2.0 * 3.14159265358979323846 * u2;
+  spare_normal_      = r * std::sin(theta);
+  has_spare_normal_  = true;
+  return mu + sigma * (r * std::cos(theta));
+}
+
+double Rng::exponential(double rate) {
+  double u = 0.0;
+  do {
+    u = uniform();
+  } while (u <= std::numeric_limits<double>::min());
+  return -std::log(u) / rate;
+}
+
 Rng make_rng(std::uint64_t master_seed, StreamKey key) {
-  std::uint64_t       seed = mix_seed(master_seed, key);
-  Rng                 rng;
-  rng.state_[0]            = splitmix64(seed);
-  rng.state_[1]            = splitmix64(seed);
-  rng.state_[2]            = splitmix64(seed);
-  rng.state_[3]            = splitmix64(seed);
+  std::uint64_t seed = mix_seed(master_seed, key);
+  Rng           rng;
+  rng.state_[0] = splitmix64(seed);
+  rng.state_[1] = splitmix64(seed);
+  rng.state_[2] = splitmix64(seed);
+  rng.state_[3] = splitmix64(seed);
   return rng;
 }
 

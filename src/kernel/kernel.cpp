@@ -1,5 +1,7 @@
 #include <lobcore/kernel/kernel.hpp>
 
+#include <lobcore/kernel/batch_member_agent.hpp>
+
 #include <cassert>
 #include <stdexcept>
 #include <utility>
@@ -13,8 +15,32 @@ AgentId Kernel::add_agent(std::unique_ptr<Agent> agent) {
     throw std::logic_error("cannot add agents after Kernel::run");
   }
   const AgentId id = static_cast<AgentId>(agents_.size());
-  agents_.push_back(AgentSlot{.agent = std::move(agent), .rng_by_component = {}});
+  agents_.push_back(AgentSlot{.agent = std::move(agent), .rng_by_component = {}, .is_batch_member = false});
   return id;
+}
+
+std::vector<AgentId> Kernel::add_batch_agents(BatchStepFn step, std::size_t n) {
+  if (finished_) {
+    throw std::logic_error("cannot add agents after Kernel::run");
+  }
+  if (!step) {
+    throw std::invalid_argument("batch step function is empty");
+  }
+  if (batch_step_ && !batch_members_.empty()) {
+    throw std::logic_error("only one python batch is supported in Stage 5");
+  }
+  batch_step_ = std::move(step);
+  std::vector<AgentId> ids;
+  ids.reserve(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const AgentId id = static_cast<AgentId>(agents_.size());
+    agents_.push_back(AgentSlot{.agent           = std::make_unique<BatchMemberAgent>(),
+                                .rng_by_component = {},
+                                .is_batch_member = true});
+    batch_members_.insert(id);
+    ids.push_back(id);
+  }
+  return ids;
 }
 
 MarketId Kernel::add_market(std::unique_ptr<Market> market) {
@@ -52,6 +78,28 @@ void Kernel::run() {
     }
 
     now_ = next.time;
+
+    if (std::holds_alternative<AgentWakeup>(next.body)) {
+      std::vector<AgentId> wakeups;
+      while (!heap_.empty()) {
+        const Event& top = heap_.top();
+        if (top.time != now_ || !std::holds_alternative<AgentWakeup>(top.body)) {
+          break;
+        }
+        if (config_.max_events.has_value() &&
+            events_processed_ + wakeups.size() >= *config_.max_events) {
+          break;
+        }
+        const auto* wakeup = std::get_if<AgentWakeup>(&top.body);
+        wakeups.push_back(wakeup->agent);
+        processed_.push_back(top);
+        heap_.pop();
+      }
+      events_processed_ += wakeups.size();
+      dispatch_agent_wakeups_at_time(std::move(wakeups));
+      continue;
+    }
+
     dispatch(next);
     heap_.pop();
     ++events_processed_;
@@ -102,6 +150,10 @@ const Market& Kernel::market(const MarketId id) const {
   return *markets_[id];
 }
 
+std::uint64_t Kernel::market_state_hash(MarketId id) const {
+  return market(id).state_hash();
+}
+
 void Kernel::dispatch(const Event& event) {
   processed_.push_back(event);
 
@@ -150,6 +202,74 @@ void Kernel::dispatch_agent_wakeup(AgentId agent) {
   KernelView   view(*this);
   AgentContext ctx(*this, agent);
   agents_[agent].agent->on_wakeup(view, ctx);
+}
+
+void Kernel::dispatch_agent_wakeups_at_time(std::vector<AgentId> wakeups) {
+  std::vector<AgentId> batch_ids;
+  batch_ids.reserve(wakeups.size());
+  for (const AgentId id : wakeups) {
+    if (id < agents_.size() && agents_[id].is_batch_member) {
+      batch_ids.push_back(id);
+    }
+  }
+
+  bool batch_flushed = false;
+  for (const AgentId id : wakeups) {
+    if (id >= agents_.size()) {
+      continue;
+    }
+    if (agents_[id].is_batch_member) {
+      if (!batch_flushed && batch_step_) {
+        const BatchObservation obs = make_batch_observation(batch_ids);
+        const BatchAction      act = batch_step_(obs);
+        apply_batch_action(batch_ids, act);
+        batch_flushed = true;
+      } else if (!batch_flushed) {
+        dispatch_agent_wakeup(id);
+      }
+      continue;
+    }
+    dispatch_agent_wakeup(id);
+  }
+}
+
+BatchObservation Kernel::make_batch_observation(const std::vector<AgentId>& agent_ids) const {
+  BatchObservation obs;
+  obs.now       = now_;
+  obs.agent_ids = agent_ids;
+  obs.markets.reserve(markets_.size());
+  for (const auto& m : markets_) {
+    obs.markets.push_back(MarketSnapshot{.best_bid = m->best_bid(), .best_ask = m->best_ask()});
+  }
+  return obs;
+}
+
+void Kernel::apply_batch_action(const std::vector<AgentId>& agent_ids, const BatchAction& action) {
+  if (action.next_wakeups.size() != agent_ids.size()) {
+    throw std::invalid_argument("next_wakeups size must equal agent_ids size");
+  }
+
+  std::unordered_set<AgentId> awake(agent_ids.begin(), agent_ids.end());
+
+  for (std::size_t i = 0; i < agent_ids.size(); ++i) {
+    const Timestamp t = action.next_wakeups[i];
+    if (t == 0) {
+      continue;
+    }
+    if (t <= now_) {
+      ++batch_rejects_.invalid_wakeup;
+      continue;
+    }
+    (void)schedule_agent_wakeup(agent_ids[i], t);
+  }
+
+  for (const OrderSubmission& sub : action.orders) {
+    if (awake.find(sub.agent_id) == awake.end()) {
+      ++batch_rejects_.order_from_sleeping_agent;
+      continue;
+    }
+    submit_order(sub.agent_id, sub.market_id, sub.msg);
+  }
 }
 
 void Kernel::dispatch_notification(AgentId to, const NotificationPayload& payload) {
