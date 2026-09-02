@@ -56,17 +56,27 @@ cmake --build build-rel
 上記 6 条件それぞれに **`Logged` 接尾辞** の対（`LoggedBook` 経由、ログは `std::vector<LogRecord>` 追記）がある。
 計測区間の注文数・板形状は非 Logged 版と同一。
 
-### 現状の数字（Release, 3 回 mean, 2026-09 計測）
+### 現状の数字（Release, repetitions=3 mean, min_time=0.01s, 2026-09 計測 @ struct-exp 着手前）
 
 環境依存のため絶対値より **同一マシン・同一ビルドでの比較** を優先する。
+計測は `./bench/run_bench_suite.sh ./build-rel/bench/lobcore_bench 0.01s`。
 
 | ベンチ | mean (ns/iteration) | 備考 |
 |--------|---------------------|------|
-| `BM_RestOnEmpty` | 39,741 | items/s ≈ 25.2M |
-| `BM_RestOnDeepBook` | 543,658 | |
-| `BM_CrossSingleLevel` | 401,250 | avg fills/order = 5 |
-| `BM_CrossSweep` | 380,640 | avg fills/order = 50 → **≈19.0 μs/order** |
-| `BM_CancelDeepBook` | 511,837 | |
+| `BM_RestOnEmpty` | 12,647,899 | |
+| `BM_RestOnDeepBook` | 1,833,693,623 | 板再構築込みイテレーション |
+| `BM_CrossSingleLevel` | 359,915,340 | avg fills/order = 5 |
+| `BM_CrossSweep` | 37,419,148 | avg fills/order = 50 |
+| `BM_CancelDeepBook` | 928,216 | |
+| `BM_FlashCrash` | 695,908,439 | |
+| `BM_RestOnEmptyLogged` | 13,005,323 | |
+| `BM_RestOnDeepBookLogged` | 1,860,883,889 | |
+| `BM_CrossSingleLevelLogged` | 371,992,446 | |
+| `BM_CrossSweepLogged` | 36,918,915 | **§6 採否の主指標** |
+| `BM_CancelDeepBookLogged` | 983,527 | |
+| `BM_FlashCrashLogged` | 734,346,038 | |
+
+（旧 Stage 3 単体 5 条件の数値は min_time・板規模が異なるため直接比較しない。）
 
 付帯成果物:
 
@@ -337,11 +347,115 @@ Stage 5（Python / Config / 実験メタデータのログヘッダ）は本実�
 - Ir: ... → ... (計測区間のみ。採否には不使用)
 ```
 
+### 6.10 実験結果（2026-09）
+
+計測: `./bench/run_bench_suite.sh ./build-rel/bench/lobcore_bench 0.01s`（repetitions=3 mean）。
+ベースラインは `main` @ PR #13 直後（`std::map` + `std::deque`）。
+
+#### 案 A: 価格レベル配列 + FIFO プール + 占有ビットマップ — **採用**
+
+| ベンチ | before (ns) | after (ns) | delta | 判定 |
+|--------|-------------|------------|-------|------|
+| `BM_CrossSweepLogged` | 36,918,915 | 17,818,941 | **−51.7%** | C3 ✓ |
+| `BM_CrossSingleLevelLogged` | 371,992,446 | 179,815,388 | −51.7% | C4 ✓ |
+| `BM_CancelDeepBookLogged` | 983,527 | 665,857 | −32.3% | ✓ |
+| `BM_FlashCrashLogged` | 734,346,038 | 348,165,345 | −52.6% | C6 ✓ |
+
+- C1–C2, C5: `ctest` 69/69、`test_diff` 一致、`test_move` 通過
+- 案 B・C は未実施（案 A が全基準を満たしたため）
+
+実装: `include/lobcore/detail/dense_book_side.hpp`, `src/dense_book_side.cpp`。
+`OrderBook` の公開 API は不変。`ReferenceBook`（map+deque）は差分テスト用に維持。
+
+### 6.11 採用前確認（2026-09）
+
+#### 1. 測定条件の一致
+
+| 項目 | ベースライン | 案 A |
+|------|-------------|------|
+| スクリプト | `bench/run_bench_suite.sh` | 同一 |
+| min_time | `0.01s` | 同一 |
+| repetitions | 3 (aggregates_only) | 同一 |
+| CMAKE | `-DCMAKE_BUILD_TYPE=Release -DLOBCORE_BUILD_BENCH=ON` | 同一 |
+| コード | `1a100ac` (map+deque) | 案 A コミット |
+
+再計測: `./bench/verify_struct_exp.sh 0.01s`（git archive で map @ `1a100ac` と案 A を同一セッション計測）。
+
+**2026-09-02 再計測結果** (同一セッション, g++, Release):
+
+| ベンチ | map (ns) | 案 A (ns) | delta |
+|--------|----------|-----------|-------|
+| `BM_CrossSweepLogged` | 35,606,155 | 17,151,779 | **−51.8%** |
+| `BM_FlashCrashLogged` | 722,947,714 | 352,953,791 | −51.2% |
+
+初回計測 (別セッション) も同程度 (−51.7% / −52.6%)。50% は測定条件の不一致ではなく、
+map+deque → 密配列+ビットマップの構造差として再現している。
+
+#### 2. BM_FlashCrash の価格帯と窓
+
+**案 A に固定窓サイズはない。** `DenseBookSide::grow_to_include` が `[min_price_, max_price_]` を動的拡張する（拒否しない）。
+
+| | ティック範囲 |
+|--|-------------|
+| 深い板 (初期) | bid 1..1000, ask 1001..2000 |
+| FlashCrash resting Buy | 500..1299 (800 ティック) |
+| FlashCrash resting Sell | 1500..2299 (800 ティック; **2000 を超える**) |
+| FlashCrash sweep | Buy @ 2000 |
+
+- 初期 ask max=2000 に対し Sell @ 2299 が **窓拡張 (resize)** を発生させる
+- bid min=1 のため **下方向 front-insert は発生しない**（resting Buy 最小 500）
+- 調査 §1 の「固定配列 + 空レベル走査」とは異なり、占有ビットマップで best 探索は O(占有レベル数)
+
+弱点未カバーだったため **`BM_FlashCrashDrift`** を追加: 初期 bid 5000..5100 / ask 5200..5300 から Buy @ 1000..4000 (下方向 insert)、Sell @ 6000..9000 (上方向 resize)、sweep @ 9000。
+
+#### 3. 窓外の挙動と test_diff
+
+| 経路 | 挙動 |
+|------|------|
+| 価格 < min_price_ | `levels_.insert` で front 拡張 (O(新幅)) |
+| 価格 > max_price_ | `levels_.resize` で末尾拡張 |
+| 拒否 | **なし** (map 実装と同じく任意価格を受理) |
+
+旧 `test_diff` (価格 90..110, 空板開始): grow_to_include をほぼ通さない。
+
+追加: **`OrderBook matches ReferenceBook with wide price drift`** — 価格 1..50000、空板、3000 ops × 2 seed。grow_to_include 両方向を通して ReferenceBook と一致することを確認。
+
+#### 4. 案 A の既知の制約（メモリ）
+
+動的拡張・拒否なしは正しさと FlashCrash 耐性の代償として、次を抱える:
+
+| 制約 | 内容 |
+|------|------|
+| メモリは広がる一方 | 一度触れた価格帯は `levels_` / `bitmap_` に残り、空レベル走査はビットマップで飛ばせても **スロット自体は解放しない** |
+| front insert は O(窓幅) | 価格 < `min_price_` のたび `levels_.insert` で既存要素を移動する |
+| 長時間 ABM | 価格が 1 → 10⁶ までドリフトすると、約 10⁶ レベル分の配列を保持し続ける |
+
+現行ベンチと広域 `test_diff` では問題にならない。ABM 実行で窓が過大になった場合は、
+**古い端の切り捨て（窓のずらし直し）** を別設計として検討する。その判断材料として本項を残す。
+
+調査文書 §1 の「配列型は価格帯が広がると崩れる」は、**固定窓 + 空レベル走査** に対する警告だった。
+案 A（動的拡張 + 占有ビットマップ）では壁時計の崩れは解消されたが、**メモリ上界は別問題として残る**。
+
 ---
 
-## 7. Stage 3 の区切り
+## 7. Stage 3 の区切りと構造変更の実証
 
-- 参照実装との差分テスト、5 条件ベンチ、プロファイル手順を整備した
-- pmr と遅延削除は計測に基づき revert し、理由をコミットログに残した
-- 「何が効かなかったか」と「何がまだ遅いか」を文書化した
-- 構造変更の実験計画は §6 にまとめた（実装は計画承認・ログ付きベンチ追加後）
+Stage 3 で得た教訓は次だった:
+
+1. Callgrind Ir を減らしても壁時計は動かない（pmr・遅延削除）
+2. 残ボトルネックは `std::map` + `std::deque` のノード追跡であり、**構造を変えない限り速くならない**
+
+案 A（§6）はまさにその構造変更である。同一セッション再計測で
+`BM_CrossSweepLogged` **−51.8%**、`BM_FlashCrashLogged` **−51.2%**。
+「命令数をいじっても実時間が動かない」という Stage 3 の結論は正しく、
+連続メモリ化がその律速を外したことの実証になった。
+
+到達点:
+
+- 参照実装（`ReferenceBook`）と差分テストを残したまま本番板を置き換えた。案 A の正しさは `test_diff`（広域 drift 含む 70 tests）が支えている
+- 5 条件 + Logged + FlashCrash(+Drift) の壁時計手順とベースラインを文書化した
+- pmr / 遅延削除は計測に基づき revert し、理由をコミットログに残した
+- 構造変更は計画（§6）→ ログ付きベンチ → 案 A 採用 → 採用前確認（§6.11）まで完了
+
+次は Stage 5（Python バインディング）。要件 5 の一括観測と、リプレイ用の実験メタデータ
+（シード・配分規則・構成）をログ先頭に置く設計はここで一体に扱う。

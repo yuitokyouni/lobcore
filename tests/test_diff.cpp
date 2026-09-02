@@ -153,10 +153,88 @@ void run_differential(std::uint64_t seed, int ops) {
   CHECK(live.state_hash() == ref.state_hash());
 }
 
+// grow_to_include の両方向 (窓拡張) を通す。価格帯 1..50000、空板から開始。
+void run_differential_wide(std::uint64_t seed, int ops) {
+  std::mt19937_64 rng(seed);
+
+  std::uniform_int_distribution<int>       op_kind(0, 99);
+  std::uniform_int_distribution<Price>     bid_price(1, 50000);
+  std::uniform_int_distribution<Price>     ask_price(1, 50000);
+  std::uniform_int_distribution<Price>     cross_buy(1, 50000);
+  std::uniform_int_distribution<Price>     cross_sell(1, 50000);
+  std::uniform_int_distribution<Qty>       qty(1, 20);
+  std::bernoulli_distribution              is_buy(0.5);
+
+  OrderBook     live;
+  ReferenceBook ref;
+  OrderId       next_id = 1;
+  Timestamp     next_ts = 1;
+  std::vector<OrderId> resting;
+
+  for (int i = 0; i < ops; ++i) {
+    const int kind = op_kind(rng);
+
+    if (kind < 10 && !resting.empty()) {
+      std::uniform_int_distribution<std::size_t> pick(0, resting.size() - 1);
+      const std::size_t idx = pick(rng);
+      const OrderId     id  = resting[idx];
+      const bool        a   = live.cancel(id);
+      const bool        b   = ref.cancel(id);
+      CHECK(a == b);
+      if (a) {
+        resting.erase(resting.begin() + static_cast<std::ptrdiff_t>(idx));
+      }
+      check_books_equal(live, ref, id);
+      continue;
+    }
+
+    if (kind < 15) {
+      const Order order{next_id++, Side::Buy, 100, 0, next_ts};
+      CHECK(same_trades(live.add_limit(order, next_ts), ref.add_limit(order, next_ts)));
+      check_books_equal(live, ref, order.id);
+      ++next_ts;
+      continue;
+    }
+
+    const bool buy = is_buy(rng);
+    Price      price = 0;
+    Qty        q     = qty(rng);
+    if (kind < 55) {
+      price = buy ? bid_price(rng) : ask_price(rng);
+    } else if (kind < 80) {
+      price = buy ? cross_buy(rng) : cross_sell(rng);
+      q     = qty(rng);
+    } else {
+      price = buy ? cross_buy(rng) : cross_sell(rng);
+      q     = qty(rng) + 10;
+    }
+
+    const OrderId id = next_id++;
+    const Order   order{id, buy ? Side::Buy : Side::Sell, price, q, next_ts};
+    CHECK(same_trades(live.add_limit(order, next_ts), ref.add_limit(order, next_ts)));
+
+    resting.erase(std::remove_if(resting.begin(), resting.end(),
+                                 [&](OrderId rid) { return !live.remaining(rid).has_value(); }),
+                  resting.end());
+    if (live.remaining(id).has_value()) {
+      resting.push_back(id);
+    }
+    check_books_equal(live, ref, id);
+    ++next_ts;
+  }
+
+  CHECK(live.state_hash() == ref.state_hash());
+}
+
 }  // namespace
 
 TEST_CASE("OrderBook matches ReferenceBook on seeded random streams") {
   run_differential(/*seed=*/42, /*ops=*/2000);
   run_differential(/*seed=*/7, /*ops=*/2000);
   run_differential(/*seed=*/123456789ULL, /*ops=*/2000);
+}
+
+TEST_CASE("OrderBook matches ReferenceBook with wide price drift") {
+  run_differential_wide(/*seed=*/99, /*ops=*/3000);
+  run_differential_wide(/*seed=*/424242ULL, /*ops=*/2000);
 }

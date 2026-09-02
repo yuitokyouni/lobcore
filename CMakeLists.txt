@@ -12,6 +12,7 @@ option(LOBCORE_SANITIZE "Enable ASan/UBSan in Debug builds (GCC/Clang only)" ON)
 # ---- library -----------------------------------------------------------------
 add_library(lobcore STATIC
   src/book.cpp
+  src/dense_book_side.cpp
   src/log.cpp
   src/reference_book.cpp
   src/kernel/kernel.cpp

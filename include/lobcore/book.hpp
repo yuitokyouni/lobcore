@@ -1,14 +1,13 @@
 #pragma once
 
 #include <cstdint>
-#include <deque>
-#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
 #include <vector>
 
 #include <lobcore/allocation.hpp>
+#include <lobcore/detail/dense_book_side.hpp>
 #include <lobcore/types.hpp>
 
 namespace lobcore {
@@ -109,27 +108,14 @@ class OrderBook {
     std::uint64_t seq;
   };
 
-  // OrderId → 価格レベルの位置。レベル内は線形走査する。
+  // OrderId → 価格レベルの位置。
   struct Location {
     Side  side;
     Price price;
   };
 
-  using BidLevels = std::map<Price, std::deque<RestingOrder>, std::greater<Price>>;
-  using AskLevels = std::map<Price, std::deque<RestingOrder>>;
-
-  static Qty level_qty(const std::deque<RestingOrder>& level);
-
-  static std::vector<LevelMaker> makers_from_level(const std::deque<RestingOrder>& level);
-  static void apply_level_allocation(std::deque<RestingOrder>& queue,
-                                     const AllocateResult&     allocation,
-                                     Price                     price,
-                                     OrderId                   taker_id,
-                                     std::vector<Trade>&       trades,
-                                     std::unordered_map<OrderId, Location>& locations);
-
-  BidLevels                             bids_;
-  AskLevels                             asks_;
+  detail::DenseBookSide               bids_;
+  detail::DenseBookSide               asks_;
   std::unordered_map<OrderId, Location> locations_;
   std::uint64_t                         next_seq_           = 0;
   Timestamp                             last_received_at_   = 0;
