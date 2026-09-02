@@ -361,7 +361,7 @@ Stage 5（Python / Config / 実験メタデータのログヘッダ）は本実�
 | `BM_CancelDeepBookLogged` | 983,527 | 665,857 | −32.3% | ✓ |
 | `BM_FlashCrashLogged` | 734,346,038 | 348,165,345 | −52.6% | C6 ✓ |
 
-- C1–C2, C5: `ctest` 69/69、`test_diff` 一致、`test_move` 通過
+- C1–C2, C5: `ctest` 70/70（広域 drift 含む）、`test_diff` 一致、`test_move` 通過
 - 案 B・C は未実施（案 A が全基準を満たしたため）
 
 実装: `include/lobcore/detail/dense_book_side.hpp`, `src/dense_book_side.cpp`。
