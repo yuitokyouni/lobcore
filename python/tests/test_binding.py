@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import lobcore as lc
-from lobcore import LOG_DTYPE, Agent, BatchAdapter, Context, Experiment, View
+from lobcore import LOG_DTYPE, Agent, BatchAdapter, Context, Experiment, View, read_log_file, write_log_file
 
 
 def test_log_dtype_matches_cpp():
@@ -76,6 +76,85 @@ def test_rng_reproducible():
     r2 = k.rng_for(0, 0)
     assert r1.next_u64() == r2.next_u64()
     assert r1.uniform() == pytest.approx(r2.uniform())
+
+
+def test_rng_normal_exponential_reproducible():
+    cfg = lc.KernelConfig()
+    cfg.master_seed = 123
+    k = lc.Kernel(cfg)
+    r1 = k.rng_for(1, 2)
+    r2 = k.rng_for(1, 2)
+    for _ in range(5):
+        assert r1.normal(0.0, 1.0) == pytest.approx(r2.normal(0.0, 1.0))
+        assert r1.exponential(2.0) == pytest.approx(r2.exponential(2.0))
+
+
+class RngViaContext(Agent):
+    def __init__(self) -> None:
+        self.samples: tuple[int, float, float, float] | None = None
+
+    def on_wakeup(self, view: View, ctx: Context) -> None:
+        r = ctx.rng(0)
+        self.samples = (
+            r.next_u64(),
+            r.uniform(),
+            r.normal(0.0, 1.0),
+            r.exponential(1.0),
+        )
+
+
+def test_context_rng_reproducible():
+    def run_once():
+        agent = RngViaContext()
+        Experiment(seed=42, agents=[agent], end_time=5).run()
+        return agent.samples
+
+    assert run_once() == run_once()
+
+
+def test_context_rng_without_kernel_raises():
+    ctx = Context(agent_id=0, now=1)
+    with pytest.raises(NotImplementedError):
+        ctx.rng(0)
+
+
+def test_view_remaining_without_kernel_raises():
+    obs = lc.BatchObservation()
+    obs.now = 1
+    obs.agent_ids = [0]
+    obs.markets = [lc.MarketSnapshot()]
+    view = View.from_observation(obs)
+    with pytest.raises(NotImplementedError):
+        view.market(0).remaining(1)
+
+
+class RemainingChecker(Agent):
+    def __init__(self) -> None:
+        self.order_id: int | None = None
+        self.remaining: int | None = None
+
+    def on_wakeup(self, view: View, ctx: Context) -> None:
+        if self.order_id is None:
+            self.order_id = ctx.submit(0, "buy", 100, 5)
+            ctx.schedule_wakeup(5)
+        else:
+            self.remaining = view.market(0).remaining(self.order_id)
+
+
+def test_view_remaining_via_experiment():
+    agent = RemainingChecker()
+    Experiment(seed=11, agents=[agent], end_time=10).run()
+    assert agent.remaining == 5
+
+
+def test_log_file_roundtrip(tmp_path):
+    result = Experiment(seed=1, agents=[RestOnce()], end_time=10).run()
+    path = tmp_path / "log.bin"
+    write_log_file(str(path), result.meta, result.log)
+    meta2, log2 = read_log_file(str(path))
+    assert meta2.master_seed == result.meta.master_seed
+    assert meta2.allocation_rule == result.meta.allocation_rule
+    assert np.array_equal(log2, result.log)
 
 
 class SeededNoise(Agent):
