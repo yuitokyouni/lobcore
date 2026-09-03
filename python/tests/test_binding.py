@@ -203,3 +203,42 @@ def test_batch_adapter_vs_direct_step():
     r2 = Experiment(seed=5, agents=[], end_time=10, step_fn=direct, agent_config={"n_agents": 2}).run()
     assert r1.state_hash == r2.state_hash
     assert np.array_equal(r1.log, r2.log)
+
+
+class MultiWakeupAgent(Agent):
+    """毎起床 cancel → re-submit を繰り返すエージェント。
+    BatchAdapter が _seq を永続保持しないと 2 回目以降で order_id が衝突する。
+    """
+
+    def __init__(self, interval: int) -> None:
+        self._interval = interval
+        self._last_order_id: int | None = None
+        self.submitted_ids: list[int] = []
+
+    def on_wakeup(self, view: View, ctx: Context) -> None:
+        if self._last_order_id is not None:
+            ctx.cancel(0, self._last_order_id)
+        oid = ctx.submit(0, "buy", 90, 1)
+        self.submitted_ids.append(oid)
+        self._last_order_id = oid
+        ctx.schedule_wakeup(ctx.now + self._interval)
+
+
+def test_multi_wakeup_order_ids_unique():
+    """複数回起床で自動採番した order_id がすべて異なること。"""
+    agent = MultiWakeupAgent(interval=3)
+    Experiment(seed=42, agents=[agent], end_time=50).run()
+    assert len(agent.submitted_ids) >= 2, "should wake up multiple times"
+    assert len(agent.submitted_ids) == len(set(agent.submitted_ids)), (
+        f"duplicate order_ids: {agent.submitted_ids}"
+    )
+
+
+def test_multi_wakeup_no_duplicate_reject():
+    """重複 order_id があると DuplicateReject ログが出る。出ないことを確認。"""
+    agent = MultiWakeupAgent(interval=5)
+    result = Experiment(seed=7, agents=[agent], end_time=100).run()
+    if len(result.log):
+        # kind 3 = Reject (EventKind::Reject), includes DuplicateOrderId
+        dup_rejects = [r for r in result.log if int(r["kind"]) == 3]
+        assert len(dup_rejects) == 0, f"unexpected DuplicateReject: {dup_rejects}"
