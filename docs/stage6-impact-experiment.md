@@ -7,6 +7,10 @@ Stage 5 までで「Python から再現可能な実験」が回る。Stage 6 の
 実データでは同じ市場を 2 回走らせられない。lobcore の要件 4（乱数ストリーム分離）と
 Stage 4 §2.4（反実仮想フィルタ）が正面から向き合う問い。
 
+**分担:** Phase 0（抑制フィルタ・`run_pair`・analysis）は lobcore。
+Phase 1 以降のモデルと PoC は `financial-abm-lab` の **YH012**（§4）。
+lobcore にはモデル実装を入れない。
+
 ---
 
 ## 0. 背景文献（要約）

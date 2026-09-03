@@ -64,12 +64,13 @@ class Context:
         *,
         kernel: Kernel | None = None,
         order_id_base: int | None = None,
+        _seq_start: int = 0,
     ) -> None:
         self.agent_id = int(agent_id)
         self.now = int(now)
         self.orders: list[OrderSubmission] = []
         self.next_wakeup: int | None = None
-        self._seq = 0
+        self._seq = int(_seq_start)
         self._kernel = kernel
         # エージェント ID 上位 32bit + 連番で衝突を避ける
         self._order_id_base = (
@@ -138,6 +139,10 @@ class BatchAdapter:
         self._strict = strict
         self._stopped: set[int] = set()
         self._kernel: Kernel | None = None
+        # エージェントごとの採番カウンタを永続保持する。
+        # Context は起床ごとに再生成されるため、カウンタをここで管理しないと
+        # 毎起床 _seq=0 にリセットされ order_id が衝突する。
+        self._seq: dict[int, int] = {}
 
     def bind_kernel(self, kernel: Kernel) -> None:
         self._kernel = kernel
@@ -159,7 +164,12 @@ class BatchAdapter:
             if aid_i in self._stopped or aid_i >= len(self._agents):
                 wakeups.append(0)
                 continue
-            ctx = Context(agent_id=aid_i, now=int(obs.now), kernel=self._kernel)
+            ctx = Context(
+                agent_id=aid_i,
+                now=int(obs.now),
+                kernel=self._kernel,
+                _seq_start=self._seq.get(aid_i, 0),
+            )
             try:
                 self._agents[aid_i].on_wakeup(view, ctx)
             except Exception:
@@ -169,6 +179,7 @@ class BatchAdapter:
                 wakeups.append(0)
                 continue
             orders.extend(ctx.orders)
+            self._seq[aid_i] = ctx._seq
             wakeups.append(ctx.next_wakeup or 0)
         act = BatchAction()
         act.orders = orders
