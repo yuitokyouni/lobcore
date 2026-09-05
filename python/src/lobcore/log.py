@@ -48,7 +48,9 @@ def write_log_file(path: str, meta: ExperimentMeta, log: np.ndarray) -> None:
     with open(path, "wb") as f:
         f.write(len(header).to_bytes(8, "little"))
         f.write(header)
-        f.write(np.ascontiguousarray(log, dtype=LOG_DTYPE).tobytes())
+        # tobytes copies complete records even for strided input. Avoid a
+        # structured-field copy, and preserve original bytes for forensic use.
+        f.write(np.asarray(log, dtype=LOG_DTYPE).tobytes())
 
 
 def read_log_file(path: str) -> tuple[ExperimentMeta, np.ndarray]:
@@ -57,5 +59,5 @@ def read_log_file(path: str) -> tuple[ExperimentMeta, np.ndarray]:
         header = json.loads(f.read(header_len).decode("utf-8"))
         payload = f.read()
     meta = ExperimentMeta(**header)
-    log = np.frombuffer(payload, dtype=LOG_DTYPE).copy()
+    log = np.frombuffer(bytearray(payload), dtype=LOG_DTYPE)
     return meta, log

@@ -1,5 +1,7 @@
 #include <lobcore/event_log.hpp>
 
+#include <cstring>
+
 namespace lobcore {
 
 namespace {
@@ -49,7 +51,10 @@ RejectReason detect_reject_reason(const RejectCounts& before, const RejectCounts
 
 std::vector<Trade> BookEventLogWriter::add_limit(const Order& order, Timestamp received_at,
                                                  const LogEmitFn& emit) {
+  // Aggregate {} initializes members, but does not guarantee padding bytes.
+  // Zero the entire representation before filling any LogRecord fields.
   LogRecord snapshot{};
+  std::memset(&snapshot, 0, sizeof(snapshot));
   fill_best_levels(snapshot, book_);
 
   const RejectCounts rejects_before = book_.rejects();
@@ -59,6 +64,7 @@ std::vector<Trade> BookEventLogWriter::add_limit(const Order& order, Timestamp r
   const RejectReason reject_reason = detect_reject_reason(rejects_before, rejects_after);
   if (reject_reason != RejectReason::None) {
     LogRecord rec{};
+    std::memset(&rec, 0, sizeof(rec));
     rec.kind             = EventKind::Reject;
     rec.side             = order.side;
     rec.reason           = reject_reason;
@@ -78,6 +84,7 @@ std::vector<Trade> BookEventLogWriter::add_limit(const Order& order, Timestamp r
   const std::uint64_t seq = next_acceptance_seq_++;
 
   LogRecord add_rec{};
+  std::memset(&add_rec, 0, sizeof(add_rec));
   add_rec.seq              = seq;
   add_rec.kind             = EventKind::Add;
   add_rec.side             = order.side;
@@ -94,6 +101,7 @@ std::vector<Trade> BookEventLogWriter::add_limit(const Order& order, Timestamp r
 
   for (const auto& trade : trades) {
     LogRecord fill_rec{};
+    std::memset(&fill_rec, 0, sizeof(fill_rec));
     fill_rec.seq              = seq;
     fill_rec.kind             = EventKind::Fill;
     fill_rec.side             = order.side;
@@ -115,6 +123,7 @@ std::vector<Trade> BookEventLogWriter::add_limit(const Order& order, Timestamp r
 
 bool BookEventLogWriter::cancel(OrderId id, Timestamp received_at, const LogEmitFn& emit) {
   LogRecord snapshot{};
+  std::memset(&snapshot, 0, sizeof(snapshot));
   fill_best_levels(snapshot, book_);
 
   const auto side = book_.resting_side(id);
@@ -124,6 +133,7 @@ bool BookEventLogWriter::cancel(OrderId id, Timestamp received_at, const LogEmit
   }
 
   LogRecord rec{};
+  std::memset(&rec, 0, sizeof(rec));
   rec.kind             = EventKind::Cancel;
   rec.side             = side.value_or(Side::Buy);
   rec.received_at      = received_at;

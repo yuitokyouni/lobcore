@@ -7,6 +7,7 @@
 #include <lobcore/kernel/order_message.hpp>
 
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -15,6 +16,11 @@
 using namespace lobcore;
 
 namespace {
+
+bool raw_logs_equal(const std::vector<LogRecord>& a, const std::vector<LogRecord>& b) {
+  return a.size() == b.size() &&
+         (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(LogRecord)) == 0);
+}
 
 AddLimit buy_msg(OrderId id, Price price, Qty qty) {
   return AddLimit{id, Side::Buy, price, qty, 0};
@@ -347,9 +353,11 @@ TEST_CASE("suppress_agent preserves all agents' rng streams") {
   const auto factual_prefix  = log_before_time(factual.log, 5);
   const auto baseline_prefix = log_before_time(baseline.log, 5);
   CHECK(factual_prefix == baseline_prefix);
+  CHECK(raw_logs_equal(factual_prefix, baseline_prefix));
 
   const auto factual_filtered = log_without_order(factual.log, 2000);
   CHECK(factual_filtered == baseline.log);
+  CHECK(raw_logs_equal(factual_filtered, baseline.log));
 }
 
 }  // namespace
@@ -362,6 +370,7 @@ TEST_CASE("same seed reproduces identical log and market state") {
   CHECK(log_hash(first.log) == log_hash(second.log));
   CHECK(first.market_hash == second.market_hash);
   CHECK(first.log == second.log);
+  CHECK(raw_logs_equal(first.log, second.log));
 }
 
 TEST_CASE("ProRata market reproduces identical log and market state for same seed") {
@@ -372,6 +381,7 @@ TEST_CASE("ProRata market reproduces identical log and market state for same see
   CHECK(log_hash(first.log) == log_hash(second.log));
   CHECK(first.market_hash == second.market_hash);
   CHECK(first.log == second.log);
+  CHECK(raw_logs_equal(first.log, second.log));
 }
 
 TEST_CASE("different master seed yields different log hash") {

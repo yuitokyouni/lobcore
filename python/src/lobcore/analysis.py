@@ -9,6 +9,12 @@ EventKindFill = 1
 EventKindCancel = 2
 
 
+def _select_log_records(log: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    # Treat a record as one opaque value while gathering it, so alignment bytes
+    # survive fancy indexing on every supported NumPy version.
+    return log.view(f"V{log.dtype.itemsize}")[mask].view(log.dtype)
+
+
 def order_id_range(agent_id: int) -> tuple[int, int]:
     """Context の自動採番 `(agent_id << 32) + seq` と同じ帯域。"""
     base = int(agent_id) << 32
@@ -37,28 +43,25 @@ def filter_log_exclude_agent(log: np.ndarray, agent_id: int) -> np.ndarray:
     if len(log) == 0:
         return log
     mask = np.array([not record_from_agent(rec, agent_id) for rec in log], dtype=bool)
-    return log[mask]
+    return _select_log_records(log, mask)
 
 
 def filter_log_exclude_order_ids(log: np.ndarray, order_ids: set[int]) -> np.ndarray:
     if len(log) == 0:
         return log
     mask = np.array([not record_from_order_ids(rec, order_ids) for rec in log], dtype=bool)
-    return log[mask]
+    return _select_log_records(log, mask)
 
 
 def log_before_time(log: np.ndarray, before: int) -> np.ndarray:
     if len(log) == 0:
         return log
-    return log[log["received_at"] < int(before)]
+    return _select_log_records(log, log["received_at"] < int(before))
 
 
 def logs_byte_equal(a: np.ndarray, b: np.ndarray) -> bool:
-    if len(a) != len(b):
-        return False
-    if len(a) == 0:
-        return True
-    return np.array_equal(a, b)
+    """Compare whole records, including padding; field equality is insufficient."""
+    return a.dtype == b.dtype and a.shape == b.shape and a.tobytes() == b.tobytes()
 
 
 def mid_from_record(rec: np.void) -> float | None:

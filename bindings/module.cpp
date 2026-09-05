@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -30,7 +31,32 @@ py::bytes log_to_bytes(const std::vector<lobcore::LogRecord>& log) {
   if (log.empty()) {
     return py::bytes();
   }
-  return py::bytes(reinterpret_cast<const char*>(log.data()), log.size() * sizeof(lobcore::LogRecord));
+  // Serialize fields into zeroed records. C++ memberwise copies are not required
+  // to preserve padding, so do not export vector storage as an object dump.
+  using lobcore::LogRecord;
+  std::string bytes(log.size() * sizeof(LogRecord), '\0');
+  for (std::size_t i = 0; i < log.size(); ++i) {
+    const auto& rec = log[i];
+    char* destination = bytes.data() + i * sizeof(LogRecord);
+    const auto copy = [destination](std::size_t offset, const auto& value) {
+      std::memcpy(destination + offset, &value, sizeof(value));
+    };
+    copy(offsetof(LogRecord, seq), rec.seq);
+    copy(offsetof(LogRecord, kind), rec.kind);
+    copy(offsetof(LogRecord, side), rec.side);
+    copy(offsetof(LogRecord, reason), rec.reason);
+    copy(offsetof(LogRecord, decided_at), rec.decided_at);
+    copy(offsetof(LogRecord, received_at), rec.received_at);
+    copy(offsetof(LogRecord, order_id), rec.order_id);
+    copy(offsetof(LogRecord, maker_id), rec.maker_id);
+    copy(offsetof(LogRecord, price), rec.price);
+    copy(offsetof(LogRecord, qty), rec.qty);
+    copy(offsetof(LogRecord, best_bid_price), rec.best_bid_price);
+    copy(offsetof(LogRecord, best_bid_qty), rec.best_bid_qty);
+    copy(offsetof(LogRecord, best_ask_price), rec.best_ask_price);
+    copy(offsetof(LogRecord, best_ask_qty), rec.best_ask_qty);
+  }
+  return py::bytes(bytes);
 }
 
 lobcore::BatchAction call_python_step(const py::object& step_fn,

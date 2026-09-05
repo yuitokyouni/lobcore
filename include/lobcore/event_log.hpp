@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -48,8 +49,13 @@ struct LogRecord {
 using LogEmitFn = std::function<void(const LogRecord&)>;
 
 // NumPy LOG_DTYPE(align=True) と一致させる。bindings と pytest で固定。
+// Bytes 11..15 are padding, not fields; producers and the byte serializer zero
+// them explicitly. Do not rely on aggregate initialization or struct copies.
 static_assert(sizeof(LogRecord) == 96);
 static_assert(alignof(LogRecord) == 8);
+static_assert(offsetof(LogRecord, reason) == 10);
+static_assert(offsetof(LogRecord, decided_at) == 16);
+static_assert(offsetof(LogRecord, best_ask_qty) == 88);
 
 // OrderBook への操作と LogRecord 生成を共通化する。LoggedBook と ContinuousMarket が使う。
 class BookEventLogWriter {

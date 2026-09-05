@@ -28,7 +28,9 @@ def _kernel_log(kernel: Kernel) -> np.ndarray:
     raw = kernel.log_bytes()
     if not raw:
         return np.empty(0, dtype=LOG_DTYPE)
-    return np.frombuffer(raw, dtype=LOG_DTYPE).copy()
+    # Copy the bytes, not structured fields: NumPy need not copy padding as
+    # part of a structured-array assignment. Keep the existing writable result.
+    return np.frombuffer(bytearray(raw), dtype=LOG_DTYPE)
 
 
 class Experiment:
