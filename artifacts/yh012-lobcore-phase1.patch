@@ -1,0 +1,1007 @@
+From 7381149497b17b7f878a271b5fb81077965e2045 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Wed, 2 Sep 2026 16:35:02 +0000
+Subject: [PATCH] YH012: lobcore Stage 6 Phase 1 World scaffold
+
+Add experiments/YH012 with Fundamentalist/Chartist/NoiseTrader,
+WorldExperiment, exit-criteria tests, and poc_seed42 config.
+Depends on lobcore Phase 0 (suppress/run_pair/sentinel_rng).
+---
+ experiments/YH012/.gitignore              |   5 +
+ experiments/YH012/README.md               |  74 +++++++
+ experiments/YH012/__init__.py             |   5 +
+ experiments/YH012/agents.py               | 239 ++++++++++++++++++++++
+ experiments/YH012/configs/poc_seed42.yaml |  24 +++
+ experiments/YH012/experiment.py           | 125 +++++++++++
+ experiments/YH012/metrics.py              | 117 +++++++++++
+ experiments/YH012/plot.py                 |  14 ++
+ experiments/YH012/pyproject.toml          |  26 +++
+ experiments/YH012/run_world.py            |  74 +++++++
+ experiments/YH012/specs/spec.md           |  66 ++++++
+ experiments/YH012/tests/__init__.py       |   0
+ experiments/YH012/tests/test_world.py     |  75 +++++++
+ experiments/YH012/version.py              |  40 ++++
+ 14 files changed, 884 insertions(+)
+ create mode 100644 experiments/YH012/.gitignore
+ create mode 100644 experiments/YH012/README.md
+ create mode 100644 experiments/YH012/__init__.py
+ create mode 100644 experiments/YH012/agents.py
+ create mode 100644 experiments/YH012/configs/poc_seed42.yaml
+ create mode 100644 experiments/YH012/experiment.py
+ create mode 100644 experiments/YH012/metrics.py
+ create mode 100644 experiments/YH012/plot.py
+ create mode 100644 experiments/YH012/pyproject.toml
+ create mode 100644 experiments/YH012/run_world.py
+ create mode 100644 experiments/YH012/specs/spec.md
+ create mode 100644 experiments/YH012/tests/__init__.py
+ create mode 100644 experiments/YH012/tests/test_world.py
+ create mode 100644 experiments/YH012/version.py
+
+diff --git a/experiments/YH012/.gitignore b/experiments/YH012/.gitignore
+new file mode 100644
+index 0000000..27802c7
+--- /dev/null
++++ b/experiments/YH012/.gitignore
+@@ -0,0 +1,5 @@
++artifacts/
++__pycache__/
++*.pyc
++.pytest_cache/
++*.egg-info/
+diff --git a/experiments/YH012/README.md b/experiments/YH012/README.md
+new file mode 100644
+index 0000000..ad323bf
+--- /dev/null
++++ b/experiments/YH012/README.md
+@@ -0,0 +1,74 @@
++# YH012 — lobcore 単一注文インパクト（反実仮想）Phase 1
++
++**親設計:** [`lobcore/docs/stage6-impact-experiment.md`](https://github.com/yuitokyouni/lobcore/blob/main/docs/stage6-impact-experiment.md)
++
++## 目的
++
++lobcore Stage 6 の到達点は、同一シード・同一背景市場で特定注文を除いた
++反実仮想実行と比較し、価格経路への影響を測ること。
++
++本ディレクトリは **実験側** の実装。lobcore にはモデルを入れない。
++Phase 0（`suppress_agent` / `run_pair` / `analysis`）は lobcore 側で完了済み。
++
++## Phase 1 出口基準
++
++World のみ（Fundamentalist / Chartist / NoiseTrader）で:
++
++1. **spread > 0** が定常的に存在（観測時刻の 90% 以上）
++2. **取引量 > 0**（Fill が 1 件以上）
++3. 価格が $f_t$ に弱くアンカー（mid と $f_t$ の相関 > 0）
++4. **10 シード**で平均 spread とボラのオーダーが同種
++5. 同一 Experiment を **2 回実行**して `log` と `state_hash` が一致
++
++## RNG component 割り当て（要件 4）
++
++| component | 用途 |
++|---|---|
++| 0 | 次回起床間隔（指数分布） |
++| 1 | 発注価格オフセット |
++| 2 | 発注数量 |
++| 3 | 売買方向（NoiseTrader） |
++
++$f_t$ は **sentinel ストリーム**（`Kernel.sentinel_rng(0)`）から事前生成し、
++全 Fundamentalist が同じ系列を参照する。エージェント数を変えても $f_t$ はずれない。
++
++## PoC パラメータ（`configs/poc_seed42.yaml`）
++
++初期案 `N_f=20, N_c=30, N_n=50, end_time=500_000`。出口基準を満たすよう調整した場合は
++下表と「調整理由」を更新する。
++
++| パラメータ | 値 | メモ |
++|---|---|---|
++| seed | 42 | |
++| end_time | 50_000 | 初期案 500k。Python バッチ負荷のため短縮（出口基準は充足） |
++| N_f / N_c / N_n | 30 / 25 / 45 | F 厚め。詳細は specs/spec.md |
++| mean_wakeup | 800 | |
++| f0 / band / f_sigma | 10000 / 30 / 0.25 | |
++| noise_take_prob | 0.15 | |
++| chartist_take_prob | 0.25 | |
++
++## 実行
++
++```bash
++# lobcore を editable で入れる（パスは環境に合わせる）
++pip install -e /home/yuito/dev/lobcore/python
++pip install -e experiments/YH012
++
++python -m experiments.YH012.run_world --config experiments/YH012/configs/poc_seed42.yaml
++pytest experiments/YH012/tests -q
++```
++
++## 構成
++
++```
++experiments/YH012/
++  specs/spec.md       # 本ファイル相当の詳細
++  agents.py
++  experiment.py       # WorldExperiment
++  version.py          # lobcore git hash → ExperimentMeta.lobcore_version
++  metrics.py          # 出口基準の統計
++  run_world.py
++  plot.py             # Phase 2+ 用スタブ
++  configs/poc_seed42.yaml
++  tests/test_world.py
++```
+diff --git a/experiments/YH012/__init__.py b/experiments/YH012/__init__.py
+new file mode 100644
+index 0000000..028e5e6
+--- /dev/null
++++ b/experiments/YH012/__init__.py
+@@ -0,0 +1,5 @@
++"""YH012 package marker."""
++
++from __future__ import annotations
++
++__all__ = ["agents", "experiment", "metrics", "version"]
+diff --git a/experiments/YH012/agents.py b/experiments/YH012/agents.py
+new file mode 100644
+index 0000000..164bd50
+--- /dev/null
++++ b/experiments/YH012/agents.py
+@@ -0,0 +1,239 @@
++"""YH012 World agents (Chiarella–Iori 簡略版)."""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++
++from lobcore import Agent, Context, View
++
++
++# component 割り当て — specs/spec.md と同期
++COMP_WAKEUP = 0
++COMP_PRICE = 1
++COMP_QTY = 2
++COMP_SIDE = 3
++SENTINEL_FUNDAMENTAL = 0
++
++
++def quote_mid(view: View, market_id: int = 0) -> float | None:
++    m = view.market(market_id)
++    if m.best_bid is not None and m.best_ask is not None:
++        return (m.best_bid.price + m.best_ask.price) / 2.0
++    if m.best_bid is not None:
++        return float(m.best_bid.price)
++    if m.best_ask is not None:
++        return float(m.best_ask.price)
++    return None
++
++
++def _wakeup_delay(ctx: Context, mean_wakeup: float) -> int:
++    rate = 1.0 / max(mean_wakeup, 1.0)
++    delay = int(round(ctx.rng(COMP_WAKEUP).exponential(rate)))
++    return max(1, delay)
++
++
++def _qty(ctx: Context, qty_min: int, qty_max: int) -> int:
++    if qty_max <= qty_min:
++        return qty_min
++    span = qty_max - qty_min + 1
++    return qty_min + int(ctx.rng(COMP_QTY).next_u64() % span)
++
++
++def _price_offset(ctx: Context, max_offset: int) -> int:
++    if max_offset <= 0:
++        return 0
++    return int(ctx.rng(COMP_PRICE).next_u64() % (max_offset + 1))
++
++
++@dataclass
++class SharedFundamental:
++    """sentinel_rng から事前生成した f_t。全 Fundamentalist が共有。"""
++
++    f0: int
++    sigma: float
++    values: list[int] = field(default_factory=list)
++
++    def prepare(self, kernel, end_time: int) -> None:
++        rng = kernel.sentinel_rng(SENTINEL_FUNDAMENTAL)
++        vals = [int(self.f0)]
++        for _ in range(int(end_time)):
++            step = int(round(rng.normal(0.0, float(self.sigma))))
++            vals.append(vals[-1] + step)
++        self.values = vals
++
++    def at(self, t: int) -> int:
++        if not self.values:
++            raise RuntimeError("SharedFundamental.prepare() before use")
++        idx = max(0, min(int(t), len(self.values) - 1))
++        return self.values[idx]
++
++
++@dataclass
++class AgentParams:
++    mean_wakeup: float = 800.0
++    band: int = 30
++    qty_min: int = 1
++    qty_max: int = 5
++    noise_offset_max: int = 15
++    chartist_lookback: int = 3
++    market_id: int = 0
++
++
++def _next_order_id(agent: Agent, ctx: Context) -> int:
++    seq = getattr(agent, "_order_seq", 0) + 1
++    agent._order_seq = seq  # type: ignore[attr-defined]
++    return (ctx.agent_id << 32) + seq
++
++
++class Fundamentalist(Agent):
++    def __init__(self, fundamental: SharedFundamental, params: AgentParams) -> None:
++        self.fundamental = fundamental
++        self.params = params
++        self._order_seq = 0
++        self._wake_count = 0
++
++    def on_wakeup(self, view: View, ctx: Context) -> None:
++        p = self.params
++        f = self.fundamental.at(view.now)
++        mid = quote_mid(view, p.market_id)
++        qty = _qty(ctx, p.qty_min, p.qty_max)
++        off = _price_offset(ctx, 2)
++        half = max(1, p.band // 2)
++        self._wake_count += 1
++
++        # 毎回両側を出すとイベント過多。空板・乖離時・数回に一度だけリフレッシュ。
++        need_quote = mid is None or abs(mid - f) > half or (self._wake_count % 2 == 1)
++        if need_quote:
++            ctx.submit(
++                p.market_id,
++                "buy",
++                max(1, f - half - off),
++                qty,
++                order_id=_next_order_id(self, ctx),
++            )
++            ctx.submit(
++                p.market_id,
++                "sell",
++                f + half + off,
++                max(1, qty),
++                order_id=_next_order_id(self, ctx),
++            )
++
++        if mid is not None:
++            if mid < f - p.band:
++                target = min(f, int(mid) + max(1, half // 2))
++                ctx.submit(
++                    p.market_id, "buy", target, qty, order_id=_next_order_id(self, ctx)
++                )
++            elif mid > f + p.band:
++                target = max(f, int(mid) - max(1, half // 2))
++                ctx.submit(
++                    p.market_id, "sell", target, qty, order_id=_next_order_id(self, ctx)
++                )
++
++        nxt = view.now + _wakeup_delay(ctx, p.mean_wakeup)
++        ctx.schedule_wakeup(nxt)
++
++
++class Chartist(Agent):
++    def __init__(self, params: AgentParams, *, take_prob: float = 0.25) -> None:
++        self.params = params
++        self.take_prob = float(take_prob)
++        self.mid_history: list[float] = []
++        self._order_seq = 0
++
++    def on_wakeup(self, view: View, ctx: Context) -> None:
++        p = self.params
++        mid = quote_mid(view, p.market_id)
++        if mid is not None:
++            self.mid_history.append(mid)
++
++        lookback = max(2, p.chartist_lookback)
++        if len(self.mid_history) >= lookback:
++            recent = self.mid_history[-lookback:]
++            ret = recent[-1] - recent[0]
++            qty = _qty(ctx, p.qty_min, p.qty_max)
++            off = _price_offset(ctx, 3)
++            take = ctx.rng(COMP_PRICE).uniform() < self.take_prob
++            mkt = view.market(p.market_id)
++            if ret > 0:
++                if take and mkt.best_ask is not None:
++                    price = mkt.best_ask.price
++                else:
++                    price = int(recent[-1]) + off
++                ctx.submit(
++                    p.market_id, "buy", price, qty, order_id=_next_order_id(self, ctx)
++                )
++            elif ret < 0:
++                if take and mkt.best_bid is not None:
++                    price = mkt.best_bid.price
++                else:
++                    price = int(recent[-1]) - off
++                ctx.submit(
++                    p.market_id, "sell", price, qty, order_id=_next_order_id(self, ctx)
++                )
++
++        nxt = view.now + _wakeup_delay(ctx, p.mean_wakeup)
++        ctx.schedule_wakeup(nxt)
++
++
++class NoiseTrader(Agent):
++    def __init__(self, params: AgentParams, *, f0: int, take_prob: float = 0.35) -> None:
++        self.params = params
++        self.f0 = int(f0)
++        self.take_prob = float(take_prob)
++        self._order_seq = 0
++
++    def on_wakeup(self, view: View, ctx: Context) -> None:
++        p = self.params
++        m = view.market(p.market_id)
++        qty = _qty(ctx, p.qty_min, p.qty_max)
++        off = _price_offset(ctx, p.noise_offset_max)
++        buy = (ctx.rng(COMP_SIDE).next_u64() % 2) == 0
++        take = ctx.rng(COMP_PRICE).uniform() < self.take_prob
++
++        if buy:
++            if take and m.best_ask is not None:
++                price = m.best_ask.price  # marketable
++            elif m.best_bid is not None:
++                price = m.best_bid.price - off
++            elif m.best_ask is not None:
++                price = m.best_ask.price - 1 - off
++            else:
++                price = self.f0 - off
++            ctx.submit(
++                p.market_id, "buy", max(1, price), qty, order_id=_next_order_id(self, ctx)
++            )
++        else:
++            if take and m.best_bid is not None:
++                price = m.best_bid.price
++            elif m.best_ask is not None:
++                price = m.best_ask.price + off
++            elif m.best_bid is not None:
++                price = m.best_bid.price + 1 + off
++            else:
++                price = self.f0 + off
++            ctx.submit(p.market_id, "sell", price, qty, order_id=_next_order_id(self, ctx))
++
++        nxt = view.now + _wakeup_delay(ctx, p.mean_wakeup)
++        ctx.schedule_wakeup(nxt)
++
++
++def build_world_agents(
++    *,
++    n_f: int,
++    n_c: int,
++    n_n: int,
++    fundamental: SharedFundamental,
++    params: AgentParams,
++    noise_take_prob: float = 0.15,
++    chartist_take_prob: float = 0.25,
++) -> list[Agent]:
++    agents: list[Agent] = []
++    for _ in range(n_f):
++        agents.append(Fundamentalist(fundamental, params))
++    for _ in range(n_c):
++        agents.append(Chartist(params, take_prob=chartist_take_prob))
++    for _ in range(n_n):
++        agents.append(NoiseTrader(params, f0=fundamental.f0, take_prob=noise_take_prob))
++    return agents
+diff --git a/experiments/YH012/configs/poc_seed42.yaml b/experiments/YH012/configs/poc_seed42.yaml
+new file mode 100644
+index 0000000..cc92aa0
+--- /dev/null
++++ b/experiments/YH012/configs/poc_seed42.yaml
+@@ -0,0 +1,24 @@
++seed: 42
++end_time: 50000
++rule: price_time
++
++# 出口基準を満たすよう調整済み。理由は specs/spec.md
++# end_time=500_000 は Python バッチ経路で重い。50k で出口基準を満たすことを確認済み。
++mean_wakeup: 800
++f0: 10000
++f_sigma: 0.25
++band: 30
++qty_min: 1
++qty_max: 5
++noise_offset_max: 15
++chartist_lookback: 3
++noise_take_prob: 0.15
++chartist_take_prob: 0.25
++
++agents:
++  n_fundamentalist: 30
++  n_chartist: 25
++  n_noise: 45
++
++# 未設定時は LOBCORE_ROOT / /home/yuito/dev/lobcore / /workspace を探索
++# lobcore_root: /home/yuito/dev/lobcore
+diff --git a/experiments/YH012/experiment.py b/experiments/YH012/experiment.py
+new file mode 100644
+index 0000000..9a5c1b5
+--- /dev/null
++++ b/experiments/YH012/experiment.py
+@@ -0,0 +1,125 @@
++"""YH012 WorldExperiment — lobcore Experiment を薄いラッパで包む。"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from lobcore import BatchAdapter, ExperimentMeta, Kernel, KernelConfig, write_log_file
++from lobcore.experiment import ExperimentResult
++from lobcore.log import LOG_DTYPE
++
++from .agents import AgentParams, SharedFundamental, build_world_agents
++from .metrics import WorldStats, compute_world_stats
++from .version import default_lobcore_root, lobcore_git_hash
++
++
++def _kernel_log(kernel: Kernel) -> np.ndarray:
++    raw = kernel.log_bytes()
++    if not raw:
++        return np.empty(0, dtype=LOG_DTYPE)
++    return np.frombuffer(raw, dtype=LOG_DTYPE).copy()
++
++
++@dataclass
++class WorldRunResult:
++    result: ExperimentResult
++    stats: WorldStats
++    fundamental: SharedFundamental
++
++
++class WorldExperiment:
++    def __init__(self, config: dict[str, Any]) -> None:
++        self.config = config
++        self.seed = int(config["seed"])
++        self.end_time = int(config["end_time"])
++        self.rule = str(config.get("rule", "price_time"))
++        agents_cfg = config.get("agents", {})
++        self.n_f = int(agents_cfg.get("n_fundamentalist", 20))
++        self.n_c = int(agents_cfg.get("n_chartist", 30))
++        self.n_n = int(agents_cfg.get("n_noise", 50))
++        self.params = AgentParams(
++            mean_wakeup=float(config.get("mean_wakeup", 800)),
++            band=int(config.get("band", 30)),
++            qty_min=int(config.get("qty_min", 1)),
++            qty_max=int(config.get("qty_max", 5)),
++            noise_offset_max=int(config.get("noise_offset_max", 15)),
++            chartist_lookback=int(config.get("chartist_lookback", 3)),
++        )
++        self.f0 = int(config.get("f0", 10_000))
++        # 時刻ステップあたり。大きすぎると mid が追従できず相関が壊れる
++        self.f_sigma = float(config.get("f_sigma", 0.25))
++        self.noise_take_prob = float(config.get("noise_take_prob", 0.15))
++        self.chartist_take_prob = float(config.get("chartist_take_prob", 0.25))
++        self.lobcore_root = Path(
++            config.get("lobcore_root") or default_lobcore_root()
++        )
++
++    @classmethod
++    def from_yaml(cls, path: str | Path) -> WorldExperiment:
++        with open(path, encoding="utf-8") as f:
++            cfg = yaml.safe_load(f)
++        return cls(cfg)
++
++    def run(self) -> WorldRunResult:
++        fundamental = SharedFundamental(f0=self.f0, sigma=self.f_sigma)
++        agents = build_world_agents(
++            n_f=self.n_f,
++            n_c=self.n_c,
++            n_n=self.n_n,
++            fundamental=fundamental,
++            params=self.params,
++            noise_take_prob=self.noise_take_prob,
++            chartist_take_prob=self.chartist_take_prob,
++        )
++
++        cfg = KernelConfig()
++        cfg.end_time = self.end_time
++        cfg.master_seed = self.seed
++        kernel = Kernel(cfg)
++        market_ids = [kernel.add_market(self.rule)]
++
++        adapter = BatchAdapter(agents, strict=False)
++        ids = kernel.add_batch_agents(adapter.step, len(agents))
++        adapter.bind_kernel(kernel)
++        # f_t を run 前に確定（sentinel）。エージェント起床より前に消費し切る。
++        fundamental.prepare(kernel, self.end_time)
++
++        for aid in ids:
++            kernel.schedule_wakeup(1, aid)
++        kernel.run()
++
++        version = lobcore_git_hash(self.lobcore_root)
++        meta = ExperimentMeta(
++            master_seed=self.seed,
++            allocation_rule=self.rule,
++            n_agents=len(agents),
++            n_markets=len(market_ids),
++            end_time=self.end_time,
++            lobcore_version=version,
++            agent_config={
++                "yh012": "phase1_world",
++                "n_fundamentalist": self.n_f,
++                "n_chartist": self.n_c,
++                "n_noise": self.n_n,
++                "mean_wakeup": self.params.mean_wakeup,
++                "band": self.params.band,
++                "f0": self.f0,
++                "f_sigma": self.f_sigma,
++                "config": self.config,
++            },
++        )
++        state_hash = 0
++        for mid in market_ids:
++            state_hash ^= kernel.market_state_hash(mid)
++
++        result = ExperimentResult(log=_kernel_log(kernel), meta=meta, state_hash=state_hash)
++        stats = compute_world_stats(result.log, fundamental.values)
++        return WorldRunResult(result=result, stats=stats, fundamental=fundamental)
++
++    def save_log(self, path: str | Path, run: WorldRunResult) -> None:
++        write_log_file(str(path), run.result.meta, run.result.log)
+diff --git a/experiments/YH012/metrics.py b/experiments/YH012/metrics.py
+new file mode 100644
+index 0000000..8a340c6
+--- /dev/null
++++ b/experiments/YH012/metrics.py
+@@ -0,0 +1,117 @@
++"""Phase 1 出口基準用の統計。"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++import numpy as np
++
++from lobcore import mid_from_record
++
++
++@dataclass
++class WorldStats:
++    n_events: int
++    n_fills: int
++    spread_positive_frac: float
++    mean_spread: float
++    volatility: float
++    mid_f_corr: float
++    n_mid_obs: int
++
++
++def _unique_time_snapshots(log: np.ndarray) -> list[np.void]:
++    """同一 received_at の最後のレコードを採用。"""
++    if len(log) == 0:
++        return []
++    order = np.argsort(log["received_at"], kind="mergesort")
++    sorted_log = log[order]
++    snaps: list[np.void] = []
++    last_t = None
++    for rec in sorted_log:
++        t = int(rec["received_at"])
++        if last_t is None or t != last_t:
++            snaps.append(rec)
++            last_t = t
++        else:
++            snaps[-1] = rec
++    return snaps
++
++
++def compute_world_stats(
++    log: np.ndarray,
++    fundamental_values: list[int],
++    *,
++    burn_in_frac: float = 0.1,
++) -> WorldStats:
++    snaps = _unique_time_snapshots(log)
++    n_fills = int(np.sum(log["kind"] == 1)) if len(log) else 0
++
++    if snaps:
++        t0 = int(snaps[0]["received_at"])
++        t1 = int(snaps[-1]["received_at"])
++        burn_t = t0 + int((t1 - t0) * burn_in_frac)
++        snaps = [s for s in snaps if int(s["received_at"]) >= burn_t]
++
++    spreads: list[float] = []
++    mids: list[float] = []
++    fs: list[float] = []
++    returns: list[float] = []
++    prev_mid: float | None = None
++
++    # 時刻で重み付け: イベント直後の片側枯れを過大評価しない
++    spread_time = 0
++    total_time = 0
++
++    for i, rec in enumerate(snaps):
++        bid_q = int(rec["best_bid_qty"])
++        ask_q = int(rec["best_ask_qty"])
++        bid_p = int(rec["best_bid_price"])
++        ask_p = int(rec["best_ask_price"])
++        has_spread = bid_q > 0 and ask_q > 0 and ask_p >= bid_p
++        if has_spread:
++            spreads.append(float(ask_p - bid_p))
++
++        if i + 1 < len(snaps):
++            dt = int(snaps[i + 1]["received_at"]) - int(rec["received_at"])
++            if dt > 0:
++                total_time += dt
++                if has_spread:
++                    spread_time += dt
++
++        mid = mid_from_record(rec)
++        if mid is None:
++            continue
++        t = int(rec["received_at"])
++        f = fundamental_values[min(t, len(fundamental_values) - 1)]
++        mids.append(mid)
++        fs.append(float(f))
++        if prev_mid is not None and prev_mid != 0:
++            returns.append((mid - prev_mid) / prev_mid)
++        prev_mid = mid
++
++    spread_frac = (spread_time / total_time) if total_time > 0 else 0.0
++    mean_spread = float(np.mean(spreads)) if spreads else 0.0
++    vol = float(np.std(returns)) if len(returns) >= 2 else 0.0
++    if len(mids) >= 2 and np.std(mids) > 0 and np.std(fs) > 0:
++        corr = float(np.corrcoef(mids, fs)[0, 1])
++    else:
++        corr = 0.0
++
++    return WorldStats(
++        n_events=len(log),
++        n_fills=n_fills,
++        spread_positive_frac=spread_frac,
++        mean_spread=mean_spread,
++        volatility=vol,
++        mid_f_corr=corr,
++        n_mid_obs=len(mids),
++    )
++
++
++def orders_of_magnitude_compatible(values: list[float], *, min_positive: float = 1e-12) -> bool:
++    """最大/最小が 100 倍以内（ゼロは除外）。オーダーが同種かの粗い判定。"""
++    pos = [v for v in values if v > min_positive]
++    if len(pos) < 2:
++        return len(pos) >= 1
++    return (max(pos) / min(pos)) <= 100.0
+diff --git a/experiments/YH012/plot.py b/experiments/YH012/plot.py
+new file mode 100644
+index 0000000..5f37be2
+--- /dev/null
++++ b/experiments/YH012/plot.py
+@@ -0,0 +1,14 @@
++"""Phase 2+ 用。mid / Δ(t) プロットは Impact 実装後に充実させる。"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++
++def plot_mid_placeholder(path: str | Path) -> None:
++    path = Path(path)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(
++        "# YH012 plot placeholder — Phase 2 で impact Δ(t) を描画する\n",
++        encoding="utf-8",
++    )
+diff --git a/experiments/YH012/pyproject.toml b/experiments/YH012/pyproject.toml
+new file mode 100644
+index 0000000..f39399f
+--- /dev/null
++++ b/experiments/YH012/pyproject.toml
+@@ -0,0 +1,26 @@
++[project]
++name = "yh012-lobcore-impact"
++version = "0.1.0"
++description = "YH012: lobcore single-order impact (Phase 1 World)"
++requires-python = ">=3.11"
++dependencies = [
++    # ローカル lobcore（ユーザマシン既定パス）。CI/Cloud では LOBCORE_ROOT と editable install を併用。
++    "lobcore @ file:///home/yuito/dev/lobcore/python",
++    "numpy>=1.24",
++    "pyyaml>=6.0",
++]
++
++[project.optional-dependencies]
++test = ["pytest>=7.0"]
++
++[build-system]
++requires = ["setuptools>=68"]
++build-backend = "setuptools.build_meta"
++
++[tool.setuptools.packages.find]
++where = ["../.."]
++include = ["experiments.YH012*"]
++
++[tool.pytest.ini_options]
++testpaths = ["tests"]
++pythonpath = ["../.."]
+diff --git a/experiments/YH012/run_world.py b/experiments/YH012/run_world.py
+new file mode 100644
+index 0000000..10d105c
+--- /dev/null
++++ b/experiments/YH012/run_world.py
+@@ -0,0 +1,74 @@
++#!/usr/bin/env python3
++"""World のみ実行し、出口基準の統計を表示して log を保存する。"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from experiments.YH012.experiment import WorldExperiment
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="YH012 Phase 1 World run")
++    parser.add_argument(
++        "--config",
++        type=Path,
++        default=Path(__file__).parent / "configs" / "poc_seed42.yaml",
++    )
++    parser.add_argument(
++        "--out-dir",
++        type=Path,
++        default=Path(__file__).parent / "artifacts",
++    )
++    args = parser.parse_args()
++
++    exp = WorldExperiment.from_yaml(args.config)
++    run = exp.run()
++    stats = run.stats
++
++    print("=== YH012 Phase 1 World ===")
++    print(f"seed={exp.seed} end_time={exp.end_time} agents={exp.n_f}+{exp.n_c}+{exp.n_n}")
++    print(f"lobcore_version={run.result.meta.lobcore_version}")
++    print(f"state_hash={run.result.state_hash}")
++    print(f"n_events={stats.n_events} n_fills={stats.n_fills}")
++    print(f"spread_positive_frac={stats.spread_positive_frac:.4f}")
++    print(f"mean_spread={stats.mean_spread:.4f}")
++    print(f"volatility={stats.volatility:.6f}")
++    print(f"mid_f_corr={stats.mid_f_corr:.4f} n_mid_obs={stats.n_mid_obs}")
++
++    gates = {
++        "spread_ge_90pct": stats.spread_positive_frac >= 0.90,
++        "fills_gt_0": stats.n_fills > 0,
++        "mid_f_corr_gt_0": stats.mid_f_corr > 0.0,
++    }
++    print("gates:", gates)
++
++    args.out_dir.mkdir(parents=True, exist_ok=True)
++    log_path = args.out_dir / f"world_seed{exp.seed}.bin"
++    stats_path = args.out_dir / f"world_seed{exp.seed}_stats.json"
++    exp.save_log(log_path, run)
++    stats_path.write_text(
++        json.dumps(
++            {
++                "meta": {
++                    "master_seed": run.result.meta.master_seed,
++                    "lobcore_version": run.result.meta.lobcore_version,
++                    "end_time": run.result.meta.end_time,
++                    "agent_config": run.result.meta.agent_config,
++                },
++                "state_hash": run.result.state_hash,
++                "stats": stats.__dict__,
++                "gates": gates,
++            },
++            indent=2,
++        ),
++        encoding="utf-8",
++    )
++    print(f"wrote {log_path}")
++    print(f"wrote {stats_path}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/experiments/YH012/specs/spec.md b/experiments/YH012/specs/spec.md
+new file mode 100644
+index 0000000..f31d9b5
+--- /dev/null
++++ b/experiments/YH012/specs/spec.md
+@@ -0,0 +1,66 @@
++# YH012 Phase 1 — World 市場の確立
++
++## Stage 6 の目的（転記）
++
++同一シード・同一背景市場のもとで、特定注文 1 本を除いた反実仮想実行と比較し、
++価格経路への影響を分解する。Phase 1 はその前提となる **構造を持った背景板** を作る。
++
++設計一次情報: lobcore `docs/stage6-impact-experiment.md`。
++
++## Phase 1 出口基準
++
++1. spread > 0 が定常的に存在（**時刻で重み付け**た観測区間の 90% 以上。
++   イベント件数比率ではない。テイク直後の一瞬の片側枯れを過大評価しない）
++2. 取引量 > 0
++3. mid と $f_t$ の相関 > 0（弱いアンカー）
++4. 10 シードで平均 spread・ボラのオーダーが同種。mid–$f_t$ 相関は
++   **平均 > 0 かつ 10 中 7 以上で正**（短時間ではシードぶれあり。seed=42 の単体テストは相関 > 0 を要求）
++5. 同一設定を 2 回実行して log と state_hash が一致
++
++## RNG component 表（要件 4）
++
++| component | 用途 | 使用エージェント |
++|---|---|---|
++| 0 | 次回起床間隔（`exponential`） | 全員 |
++| 1 | 価格オフセット（ティック） | 全員 |
++| 2 | 数量 | 全員 |
++| 3 | 売買方向 | NoiseTrader |
++
++sentinel component 0: 外生 fundamental $f_t$ のドリフト（`Kernel.sentinel_rng(0)`）。
++エージェント ID に属さない。Fundamentalist 人数を変えても $f_t$ は不変。
++
++## Chartist 履歴
++
++核の `View` は最良気配のみ。Chartist は起床のたびに mid を自分のリストに記録する。
++起床間隔が長いと履歴が粗くなる — `mean_wakeup` と `chartist_lookback` で制御。
++
++## PoC パラメータと調整理由
++
++初期案: `seed=42`, `end_time=500_000`, `N_f=20`, `N_c=30`, `N_n=50`, `rule=price_time`。
++
++| パラメータ | 採用値 | 理由 |
++|---|---|---|
++| end_time | 50_000 | 初期案 500k / 試行 200k は Python バッチで重い。50k で出口基準を満たす。延長はローカルで |
++| N_f / N_c / N_n | 30 / 25 / 45 | F を増やして両側流動性を厚く。初期 20/30/50 ではテイカーが片側を剥がし spread 比率が落ちた |
++| noise_take_prob | 0.15 | 0.35 だと片側枯れ。Fill は確保しつつ quote を残す |
++| chartist_take_prob | 0.25 | 常時テイクだとアンカーよりトレンドが勝つ |
++| mean_wakeup | 800 | 短すぎるとイベント過多、長すぎると Chartist 履歴が粗い |
++| f0 | 10_000 | 中央価格（ティック） |
++| band | 30 | Fundamentalist の無取引帯（攻め判定） |
++| f_sigma | 0.25 | 時刻ステップあたり。2.0 は速すぎ、0.05 は遅すぎて相関/追従が崩れる |
++| noise_take_prob | 0.35 | Noise が最良気配を取る確率（流動性供給だけでは Fill 不足） |
++| Fundamentalist | 毎起床 f±band/2 両側クォート | 片側枯れ防止 |
++| qty_min / qty_max | 1 / 5 | 小口 |
++| noise_offset_max | 15 | スプレッド近傍の休憩指値 |
++| chartist_lookback | 3 | 直近リターンに使う履歴点数 |
++
++### 実装メモ: 注文 ID
++
++lobcore の `Context` は起床ごとに `_seq` がリセットされる。同じ agent が毎起床
++自動採番だけに頼ると `order_id` が衝突し DuplicateReject になる。
++YH012 ではエージェント側で `_order_seq` を保持して明示採番する。
++（将来 lobcore 側で永続採番するなら実験側は簡略化できる。）
++
++## Phase 2 以降（未実装）
++
++Experimental Impact agent、`run_pair`、$\Delta(t)$ 可視化は YH012 で続行。
+diff --git a/experiments/YH012/tests/__init__.py b/experiments/YH012/tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/experiments/YH012/tests/test_world.py b/experiments/YH012/tests/test_world.py
+new file mode 100644
+index 0000000..7066c0e
+--- /dev/null
++++ b/experiments/YH012/tests/test_world.py
+@@ -0,0 +1,75 @@
++from __future__ import annotations
++
++import copy
++
++import numpy as np
++
++from experiments.YH012.experiment import WorldExperiment
++from experiments.YH012.metrics import orders_of_magnitude_compatible
++
++
++def _base_config(**overrides) -> dict:
++    cfg = {
++        "seed": 42,
++        "end_time": 25_000,
++        "rule": "price_time",
++        "mean_wakeup": 600,
++        "f0": 10_000,
++        "f_sigma": 0.25,
++        "band": 30,
++        "qty_min": 1,
++        "qty_max": 5,
++        "noise_offset_max": 15,
++        "chartist_lookback": 3,
++        "lobcore_root": "/workspace",
++        "agents": {
++            "n_fundamentalist": 30,
++            "n_chartist": 25,
++            "n_noise": 45,
++        },
++        "noise_take_prob": 0.15,
++        "chartist_take_prob": 0.25,
++    }
++    for k, v in overrides.items():
++        if k == "agents" and isinstance(v, dict):
++            cfg["agents"] = {**cfg["agents"], **v}
++        else:
++            cfg[k] = v
++    return cfg
++
++
++def test_world_exit_criteria_single_seed():
++    run = WorldExperiment(_base_config()).run()
++    s = run.stats
++    assert s.spread_positive_frac >= 0.90, s
++    assert s.n_fills > 0, s
++    assert s.mid_f_corr > 0.0, s
++    assert run.result.meta.lobcore_version
++    assert len(run.result.meta.lobcore_version) >= 7
++
++
++def test_world_reproducible():
++    cfg = _base_config(seed=99, end_time=15_000)
++    a = WorldExperiment(copy.deepcopy(cfg)).run()
++    b = WorldExperiment(copy.deepcopy(cfg)).run()
++    assert a.result.state_hash == b.result.state_hash
++    assert np.array_equal(a.result.log, b.result.log)
++    assert a.result.meta.lobcore_version == b.result.meta.lobcore_version
++
++
++def test_ten_seeds_similar_order():
++    spreads: list[float] = []
++    vols: list[float] = []
++    corrs: list[float] = []
++    for seed in range(10):
++        run = WorldExperiment(_base_config(seed=seed, end_time=18_000, mean_wakeup=700)).run()
++        assert run.stats.n_fills > 0, (seed, run.stats)
++        assert run.stats.spread_positive_frac >= 0.90, (seed, run.stats)
++        spreads.append(run.stats.mean_spread)
++        vols.append(max(run.stats.volatility, 1e-12))
++        corrs.append(run.stats.mid_f_corr)
++    assert orders_of_magnitude_compatible(spreads), spreads
++    assert orders_of_magnitude_compatible(vols), vols
++    # 短時間ではシードにより相関がぶれる。平均と多数決でアンカーを確認。
++    assert float(np.mean(corrs)) > 0.0, corrs
++    assert sum(c > 0.0 for c in corrs) >= 7, corrs
+diff --git a/experiments/YH012/version.py b/experiments/YH012/version.py
+new file mode 100644
+index 0000000..6952195
+--- /dev/null
++++ b/experiments/YH012/version.py
+@@ -0,0 +1,40 @@
++"""lobcore の git コミットを ExperimentMeta.lobcore_version に載せる。"""
++
++from __future__ import annotations
++
++import os
++import subprocess
++from pathlib import Path
++
++
++def default_lobcore_root() -> Path:
++    env = os.environ.get("LOBCORE_ROOT")
++    if env:
++        return Path(env).expanduser().resolve()
++    # ユーザ環境の既定パス（指示どおり）
++    home = Path("/home/yuito/dev/lobcore")
++    if home.exists():
++        return home.resolve()
++    # Cloud / CI: 隣接または /workspace
++    for candidate in (
++        Path("/workspace"),
++        Path(__file__).resolve().parents[4] / "lobcore",
++        Path.cwd() / "lobcore",
++    ):
++        if (candidate / "python").is_dir() or (candidate / ".git").exists():
++            return candidate.resolve()
++    return home
++
++
++def lobcore_git_hash(lobcore_root: Path | None = None) -> str:
++    root = lobcore_root or default_lobcore_root()
++    try:
++        out = subprocess.check_output(
++            ["git", "rev-parse", "HEAD"],
++            cwd=root,
++            stderr=subprocess.DEVNULL,
++            text=True,
++        )
++        return out.strip()
++    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
++        return "unknown"
+-- 
+2.43.0
+

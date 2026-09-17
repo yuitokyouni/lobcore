@@ -1,0 +1,59 @@
+From 6a140b2309532b377045e1e463a4e88acbbc5a66 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 3 Sep 2026 16:01:59 +0000
+Subject: [PATCH] =?UTF-8?q?spec:=20Chartist=20=E5=8E=9F=E5=85=B8=E3=81=A8?=
+ =?UTF-8?q?=E3=81=AE=E5=B7=AE=E3=82=92=E8=A8=98=E9=8C=B2=E3=80=81=E6=B3=A8?=
+ =?UTF-8?q?=E6=96=87=20ID=20=E3=83=A1=E3=83=A2=E3=82=92=20lobcore=20?=
+ =?UTF-8?q?=E4=BF=AE=E6=AD=A3=E5=BE=8C=E3=81=AE=E7=8A=B6=E6=85=8B=E3=81=AB?=
+ =?UTF-8?q?=E6=9B=B4=E6=96=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ experiments/YH012/specs/spec.md | 22 ++++++++++++++++++----
+ 1 file changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/experiments/YH012/specs/spec.md b/experiments/YH012/specs/spec.md
+index f31d9b5..8619ed4 100644
+--- a/experiments/YH012/specs/spec.md
++++ b/experiments/YH012/specs/spec.md
+@@ -34,6 +34,17 @@ sentinel component 0: 外生 fundamental $f_t$ のドリフト（`Kernel.sentine
+ 核の `View` は最良気配のみ。Chartist は起床のたびに mid を自分のリストに記録する。
+ 起床間隔が長いと履歴が粗くなる — `mean_wakeup` と `chartist_lookback` で制御。
+ 
++### 原典（Chiarella & Iori 2002）との差異
++
++| 項目 | YH012 実装 | 原典 |
++|------|-----------|------|
++| トレンドシグナル | 直近 `chartist_lookback` 点の mid 移動平均の傾き | 直近リターン $r_t = p_{t-1}/p_{t-2} - 1$ をそのまま使用 |
++| 効果 | 平滑化により反応が鈍くなる。トレンド追随のラグが増える | 単ステップのリターンに即反応。ノイズも拾いやすい |
++
++**Phase 5 キャリブレーション時の注意**: 移動平均による平滑化はトレンド成分の強度を
++原典より弱める。`chartist_lookback=1` にすると原典相当になる。推定パラメータを
++原典論文と比較するときはこの差を考慮すること。
++
+ ## PoC パラメータと調整理由
+ 
+ 初期案: `seed=42`, `end_time=500_000`, `N_f=20`, `N_c=30`, `N_n=50`, `rule=price_time`。
+@@ -56,10 +67,13 @@ sentinel component 0: 外生 fundamental $f_t$ のドリフト（`Kernel.sentine
+ 
+ ### 実装メモ: 注文 ID
+ 
+-lobcore の `Context` は起床ごとに `_seq` がリセットされる。同じ agent が毎起床
+-自動採番だけに頼ると `order_id` が衝突し DuplicateReject になる。
+-YH012 ではエージェント側で `_order_seq` を保持して明示採番する。
+-（将来 lobcore 側で永続採番するなら実験側は簡略化できる。）
++**lobcore 修正済み（PR #23）**: `BatchAdapter` がエージェントごとの `_seq` を
++永続保持するよう修正。`Context` は起床ごとに再生成されるが、カウンタは
++`BatchAdapter` 側で引き継がれ衝突しなくなった。
++
++YH012 エージェント側の `_order_seq` による明示採番は、lobcore を
++`cursor/fix-order-id-seq-8af8` 以降に更新した後は不要になる。
++Phase 2 実装時に lobcore 採番に戻すこと。
+ 
+ ## Phase 2 以降（未実装）
+ 
+-- 
+2.43.0
+
