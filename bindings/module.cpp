@@ -224,8 +224,10 @@ PYBIND11_MODULE(_core, m) {
       .def("log_bytes", [](const lobcore::Kernel& k) { return log_to_bytes(k.emitted_log()); })
       .def("suppress_agent", &lobcore::Kernel::suppress_agent)
       .def("is_agent_suppressed", &lobcore::Kernel::is_agent_suppressed)
-      .def("sentinel_rng", &lobcore::Kernel::sentinel_rng)
-      .def("rng_for", [](lobcore::Kernel& k, lobcore::AgentId agent, lobcore::ComponentId comp) {
-        return k.rng_for(agent, comp);
-      });
+      // Streams belong to the kernel. Copying one on each Python lookup
+      // restarts its sequence; keep the owner alive while a stream is held.
+      .def("sentinel_rng", &lobcore::Kernel::sentinel_rng,
+           py::return_value_policy::reference_internal)
+      .def("rng_for", &lobcore::Kernel::rng_for,
+           py::return_value_policy::reference_internal);
 }

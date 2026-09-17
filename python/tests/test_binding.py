@@ -71,9 +71,9 @@ def test_schedule_wakeup_now_raises():
 def test_rng_reproducible():
     cfg = lc.KernelConfig()
     cfg.master_seed = 42
-    k = lc.Kernel(cfg)
-    r1 = k.rng_for(0, 0)
-    r2 = k.rng_for(0, 0)
+    k1, k2 = lc.Kernel(cfg), lc.Kernel(cfg)
+    r1 = k1.rng_for(0, 0)
+    r2 = k2.rng_for(0, 0)
     assert r1.next_u64() == r2.next_u64()
     assert r1.uniform() == pytest.approx(r2.uniform())
 
@@ -81,9 +81,9 @@ def test_rng_reproducible():
 def test_rng_normal_exponential_reproducible():
     cfg = lc.KernelConfig()
     cfg.master_seed = 123
-    k = lc.Kernel(cfg)
-    r1 = k.rng_for(1, 2)
-    r2 = k.rng_for(1, 2)
+    k1, k2 = lc.Kernel(cfg), lc.Kernel(cfg)
+    r1 = k1.rng_for(1, 2)
+    r2 = k2.rng_for(1, 2)
     for _ in range(5):
         assert r1.normal(0.0, 1.0) == pytest.approx(r2.normal(0.0, 1.0))
         assert r1.exponential(2.0) == pytest.approx(r2.exponential(2.0))

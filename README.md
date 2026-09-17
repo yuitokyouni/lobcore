@@ -1,5 +1,9 @@
 # lobcore
 
+**2026-09-17: Python RNGの状態コピーを修正。** `rng_for` / `sentinel_rng` の再取得で
+乱数列が先頭へ戻っていた問題と、既存実験の再実行が必要な範囲は
+[修正記録](docs/python-rng-correction.md)を参照。
+
 単一銘柄・価格時間優先の板 (LOB) マッチングエンジン。
 Stage 4 で離散イベント型の市場シミュレータ核、Stage 5 で pybind11 経由の Python モジュールに育てる。
 
